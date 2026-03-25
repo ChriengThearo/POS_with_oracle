@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Support\BakongQR;
 use App\Support\SessionCart;
 use App\Support\StaffAuth;
 use Illuminate\Database\QueryException;
@@ -944,9 +945,23 @@ class EcommerceController extends Controller
             return back()->withInput()->with('error', 'Failed to create invoice: '.$e->getMessage());
         }
 
-        return redirect()
+        $grandTotal = $this->invoiceGrandTotal($invoiceNo);
+        $qrString = null;
+        try {
+            $qrString = BakongQR::generateMerchantQR($grandTotal, (string) $invoiceNo);
+        } catch (\Throwable $e) {
+            // QR generation failure should not block invoice creation
+        }
+
+        $redirect = redirect()
             ->route('invoices.index', ['invoice_no' => $invoiceNo])
             ->with('success', "Invoice #{$invoiceNo} created.");
+
+        if ($qrString) {
+            $redirect->with('bakong_qr', $qrString)->with('bakong_qr_amount', $grandTotal);
+        }
+
+        return $redirect;
     }
 
     public function addInvoiceItems(Request $request, int $invoiceNo): RedirectResponse
@@ -1039,9 +1054,23 @@ class EcommerceController extends Controller
             return back()->withInput()->with('error', 'Unable to add invoice items: '.$e->getMessage());
         }
 
-        return redirect()
+        $grandTotal = $this->invoiceGrandTotal($invoiceNo);
+        $qrString = null;
+        try {
+            $qrString = BakongQR::generateMerchantQR($grandTotal, (string) $invoiceNo);
+        } catch (\Throwable $e) {
+            // QR generation failure should not block invoice update
+        }
+
+        $redirect = redirect()
             ->route('invoices.index', ['invoice_no' => $invoiceNo])
             ->with('success', 'Invoice items added successfully.');
+
+        if ($qrString) {
+            $redirect->with('bakong_qr', $qrString)->with('bakong_qr_amount', $grandTotal);
+        }
+
+        return $redirect;
     }
 
     public function addPurchaseItems(Request $request, int $purchaseNo): RedirectResponse
