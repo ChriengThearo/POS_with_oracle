@@ -863,6 +863,8 @@ class EcommerceController extends Controller
             'items.*.product_no' => ['required_with:items', 'string', 'max:20'],
             'items.*.qty' => ['required_with:items', 'integer', 'min:1', 'max:9999'],
         ]);
+        $recieveAmount = (float) ($validated['recieve_amount'] ?? 0);
+        $currencyNo = $this->resolveCurrencyNoFromInput($validated['payment_currency']);
 
         $staff = StaffAuth::user();
         $employeeId = (int) ($staff['employee_id'] ?? 0);
@@ -913,7 +915,7 @@ class EcommerceController extends Controller
         try {
             $conn = $this->db();
             $invoiceNo = null;
-            $conn->transaction(function () use ($conn, $clientNo, $employeeId, $validated, $items, &$invoiceNo): void {
+            $conn->transaction(function () use ($conn, $clientNo, $employeeId, $validated, $items, $recieveAmount, $currencyNo, &$invoiceNo): void {
                 $invoiceNo = $this->createInvoice(
                     $clientNo,
                     $employeeId,
@@ -937,18 +939,16 @@ class EcommerceController extends Controller
                 }
 
                 $grandTotal = $this->invoiceGrandTotal($invoiceNo);
-                $recieveAmount = (float) ($validated['recieve_amount'] ?? 0);
-                $currencyNo = $this->resolveCurrencyNoFromInput($validated['payment_currency']) ?? 0;
-                $this->upsertPayment($invoiceNo, $grandTotal, $recieveAmount, $currencyNo > 0 ? $currencyNo : null);
+                $this->upsertPayment($invoiceNo, $grandTotal, $recieveAmount, $currencyNo);
             }, 3);
         } catch (\Throwable $e) {
             return back()->withInput()->with('error', 'Failed to create invoice: '.$e->getMessage());
         }
 
-        $grandTotal = $this->invoiceGrandTotal($invoiceNo);
+        $qrAmountUsd = $this->toUsdAmount($recieveAmount, $currencyNo);
         $qrString = null;
         try {
-            $qrString = BakongQR::generateMerchantQR($grandTotal, (string) $invoiceNo);
+            $qrString = BakongQR::generateMerchantQR($qrAmountUsd, (string) $invoiceNo);
         } catch (\Throwable $e) {
             // QR generation failure should not block invoice creation
         }
@@ -958,7 +958,7 @@ class EcommerceController extends Controller
             ->with('success', "Invoice #{$invoiceNo} created.");
 
         if ($qrString) {
-            $redirect->with('bakong_qr', $qrString)->with('bakong_qr_amount', $grandTotal);
+            $redirect->with('bakong_qr', $qrString)->with('bakong_qr_amount', $qrAmountUsd);
         }
 
         return $redirect;
@@ -974,6 +974,8 @@ class EcommerceController extends Controller
             'recieve_amount' => ['required', 'numeric', 'min:0'],
             'payment_currency' => ['required'],
         ]);
+        $recieveAmount = (float) ($validated['recieve_amount'] ?? 0);
+        $currencyNo = $this->resolveCurrencyNoFromInput($validated['payment_currency']);
 
         $conn = $this->db();
 
@@ -1033,7 +1035,7 @@ class EcommerceController extends Controller
         }
 
         try {
-            $conn->transaction(function () use ($conn, $invoiceNo, $items, $validated): void {
+            $conn->transaction(function () use ($conn, $invoiceNo, $items, $recieveAmount, $currencyNo): void {
                 foreach ($items as $item) {
                     $conn->insert(
                         'INSERT INTO INVOICE_DETAILS (INVOICE_NO, PRODUCT_NO, QTY) VALUES (:invoice_no, :product_no, :qty)',
@@ -1046,18 +1048,16 @@ class EcommerceController extends Controller
                 }
 
                 $grandTotal = $this->invoiceGrandTotal($invoiceNo);
-                $recieveAmount = (float) ($validated['recieve_amount'] ?? 0);
-                $currencyNo = $this->resolveCurrencyNoFromInput($validated['payment_currency']) ?? 0;
-                $this->upsertPayment($invoiceNo, $grandTotal, $recieveAmount, $currencyNo > 0 ? $currencyNo : null);
+                $this->upsertPayment($invoiceNo, $grandTotal, $recieveAmount, $currencyNo);
             }, 3);
         } catch (\Throwable $e) {
             return back()->withInput()->with('error', 'Unable to add invoice items: '.$e->getMessage());
         }
 
-        $grandTotal = $this->invoiceGrandTotal($invoiceNo);
+        $qrAmountUsd = $this->toUsdAmount($recieveAmount, $currencyNo);
         $qrString = null;
         try {
-            $qrString = BakongQR::generateMerchantQR($grandTotal, (string) $invoiceNo);
+            $qrString = BakongQR::generateMerchantQR($qrAmountUsd, (string) $invoiceNo);
         } catch (\Throwable $e) {
             // QR generation failure should not block invoice update
         }
@@ -1067,7 +1067,7 @@ class EcommerceController extends Controller
             ->with('success', 'Invoice items added successfully.');
 
         if ($qrString) {
-            $redirect->with('bakong_qr', $qrString)->with('bakong_qr_amount', $grandTotal);
+            $redirect->with('bakong_qr', $qrString)->with('bakong_qr_amount', $qrAmountUsd);
         }
 
         return $redirect;
@@ -2704,6 +2704,19 @@ class EcommerceController extends Controller
         $resolved = (float) $rate;
 
         return $resolved > 0 ? $resolved : 1.0;
+    }
+
+    private function toUsdAmount(float $amount, ?int $currencyNo = null): float
+    {
+        $resolvedCurrencyNo = $currencyNo !== null && $currencyNo > 0
+            ? $currencyNo
+            : $this->defaultCurrencyNo();
+        $rateToUsd = $resolvedCurrencyNo !== null ? $this->currencyRateToUsd($resolvedCurrencyNo) : 1.0;
+        if ($rateToUsd <= 0) {
+            $rateToUsd = 1.0;
+        }
+
+        return round(max(0, $amount) / $rateToUsd, 2);
     }
 
     private function normalizedDiscountRate(float $discount): float
