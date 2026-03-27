@@ -924,19 +924,19 @@
     @endif
 
     @if(session('bakong_qr'))
+        @php
+            $bakongQrCurrency = mb_strtoupper((string) session('bakong_qr_currency', 'USD'));
+            $bakongQrDecimals = $bakongQrCurrency === 'KHR' ? 0 : 2;
+            $bakongQrPrefix = $bakongQrCurrency === 'USD' ? '$' : '';
+        @endphp
         <div
             id="bakong-qr-modal"
             style="position: fixed; inset: 0; background: rgba(10, 14, 20, 0.55); display: flex; align-items: center; justify-content: center; z-index: 1100; padding: 16px;"
         >
             <div class="card" role="dialog" aria-modal="true" style="width: min(420px, 100%); margin: 0; text-align: center;">
-                <div style="display: flex; align-items: center; gap: 10px; justify-content: center; margin-bottom: 12px;">
-                    <img src="https://bakong.nbc.gov.kh/images/logo.svg" alt="Bakong" style="height: 36px;" onerror="this.style.display='none'">
-                    <h3 style="margin: 0;">Bakong KHQR Payment</h3>
-                </div>
-                <p style="margin: 0 0 8px; font-size: .9rem; color: #666;">Scan this QR code with any Bakong-supported app to pay</p>
                 <div style="display: flex; align-items: baseline; justify-content: center; gap: 6px; margin-bottom: 16px;">
-                    <strong style="font-size: 1.6rem; color: #1a6b3c;">${{ number_format((float) session('bakong_qr_amount', 0), 2) }}</strong>
-                    <span style="font-size: .95rem; color: #888;">USD</span>
+                    <strong style="font-size: 1.6rem; color: #1a6b3c;">{{ $bakongQrPrefix }}{{ number_format((float) session('bakong_qr_amount', 0), $bakongQrDecimals) }}</strong>
+                    <span style="font-size: .95rem; color: #888;">{{ $bakongQrCurrency }}</span>
                 </div>
                 <div id="bakong-qr-container" style="display: inline-block; padding: 12px; background: #fff; border-radius: 12px; border: 2px solid #e5e7eb;"></div>
                 <div style="margin-top: 16px;">

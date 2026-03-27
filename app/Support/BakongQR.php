@@ -8,7 +8,7 @@ use KHQR\Models\MerchantInfo;
 
 class BakongQR
 {
-    public static function generateMerchantQR(float $amountUsd, ?string $invoiceNo = null): ?string
+    public static function generateMerchantQR(float $amount, ?string $invoiceNo = null, string $currencyCode = 'USD'): ?string
     {
         $account = config('bakong.merchant_account');
         $merchantName = config('bakong.merchant_name', 'My Store');
@@ -22,6 +22,14 @@ class BakongQR
 
         // Expiration: 10 minutes from now (in milliseconds as string)
         $expirationMs = (string) (int) (microtime(true) * 1000 + 10 * 60 * 1000);
+        $resolvedCurrencyCode = mb_strtoupper(trim($currencyCode));
+        $isKhr = $resolvedCurrencyCode === 'KHR'
+            || str_contains($resolvedCurrencyCode, 'RIEL')
+            || str_contains($resolvedCurrencyCode, 'RIAL');
+        $khqrCurrency = $isKhr ? KHQRData::CURRENCY_KHR : KHQRData::CURRENCY_USD;
+        $finalAmount = $isKhr
+            ? round(max(0, $amount), 0)
+            : round(max(0, $amount), 2);
 
         $merchantInfo = new MerchantInfo(
             bakongAccountID: $account,
@@ -29,8 +37,8 @@ class BakongQR
             merchantCity: $city,
             merchantID: $merchantId,
             acquiringBank: $acquiringBank,
-            currency: KHQRData::CURRENCY_USD,
-            amount: round($amountUsd, 2),
+            currency: $khqrCurrency,
+            amount: $finalAmount,
             billNumber: $invoiceNo,
             storeLabel: config('bakong.store_label', 'WEBSTORE'),
             terminalLabel: config('bakong.terminal_label', 'ONLINE'),

@@ -945,10 +945,12 @@ class EcommerceController extends Controller
             return back()->withInput()->with('error', 'Failed to create invoice: '.$e->getMessage());
         }
 
-        $qrAmountUsd = $this->toUsdAmount($recieveAmount, $currencyNo);
+        $qrPayload = $this->bakongQrPayload($recieveAmount, $currencyNo);
+        $qrAmount = (float) ($qrPayload['amount'] ?? 0);
+        $qrCurrencyCode = (string) ($qrPayload['currency_code'] ?? 'USD');
         $qrString = null;
         try {
-            $qrString = BakongQR::generateMerchantQR($qrAmountUsd, (string) $invoiceNo);
+            $qrString = BakongQR::generateMerchantQR($qrAmount, (string) $invoiceNo, $qrCurrencyCode);
         } catch (\Throwable $e) {
             // QR generation failure should not block invoice creation
         }
@@ -958,7 +960,10 @@ class EcommerceController extends Controller
             ->with('success', "Invoice #{$invoiceNo} created.");
 
         if ($qrString) {
-            $redirect->with('bakong_qr', $qrString)->with('bakong_qr_amount', $qrAmountUsd);
+            $redirect
+                ->with('bakong_qr', $qrString)
+                ->with('bakong_qr_amount', $qrAmount)
+                ->with('bakong_qr_currency', $qrCurrencyCode);
         }
 
         return $redirect;
@@ -1054,10 +1059,12 @@ class EcommerceController extends Controller
             return back()->withInput()->with('error', 'Unable to add invoice items: '.$e->getMessage());
         }
 
-        $qrAmountUsd = $this->toUsdAmount($recieveAmount, $currencyNo);
+        $qrPayload = $this->bakongQrPayload($recieveAmount, $currencyNo);
+        $qrAmount = (float) ($qrPayload['amount'] ?? 0);
+        $qrCurrencyCode = (string) ($qrPayload['currency_code'] ?? 'USD');
         $qrString = null;
         try {
-            $qrString = BakongQR::generateMerchantQR($qrAmountUsd, (string) $invoiceNo);
+            $qrString = BakongQR::generateMerchantQR($qrAmount, (string) $invoiceNo, $qrCurrencyCode);
         } catch (\Throwable $e) {
             // QR generation failure should not block invoice update
         }
@@ -1067,7 +1074,10 @@ class EcommerceController extends Controller
             ->with('success', 'Invoice items added successfully.');
 
         if ($qrString) {
-            $redirect->with('bakong_qr', $qrString)->with('bakong_qr_amount', $qrAmountUsd);
+            $redirect
+                ->with('bakong_qr', $qrString)
+                ->with('bakong_qr_amount', $qrAmount)
+                ->with('bakong_qr_currency', $qrCurrencyCode);
         }
 
         return $redirect;
@@ -2717,6 +2727,91 @@ class EcommerceController extends Controller
         }
 
         return round(max(0, $amount) / $rateToUsd, 2);
+    }
+
+    /**
+     * @return array{amount: float, currency_code: string}
+     */
+    private function bakongQrPayload(float $amount, ?int $currencyNo = null): array
+    {
+        if ($this->isRielCurrency($currencyNo)) {
+            return [
+                'amount' => round(max(0, $amount), 0),
+                'currency_code' => 'KHR',
+            ];
+        }
+
+        return [
+            'amount' => $this->toUsdAmount($amount, $currencyNo),
+            'currency_code' => 'USD',
+        ];
+    }
+
+    private function isRielCurrency(?int $currencyNo = null): bool
+    {
+        $code = $this->currencyCode($currencyNo);
+        if ($code === '') {
+            return false;
+        }
+
+        $normalized = mb_strtoupper(trim($code));
+
+        return $normalized === 'KHR'
+            || str_contains($normalized, 'KHR')
+            || str_contains($normalized, 'RIEL')
+            || str_contains($normalized, 'RIAL');
+    }
+
+    private function currencyCode(?int $currencyNo = null): string
+    {
+        $resolvedCurrencyNo = $currencyNo !== null && $currencyNo > 0
+            ? $currencyNo
+            : $this->defaultCurrencyNo();
+        if ($resolvedCurrencyNo === null || $resolvedCurrencyNo <= 0) {
+            return 'USD';
+        }
+
+        $columns = $this->tableColumns('CURRENCIES');
+        $idCol = $this->pickColumn($columns, ['CURRENCY_NO', 'CURRENCY_ID', 'ID']);
+        $codeCol = $this->pickColumn($columns, ['CURRENCY_CODE', 'CODE', 'ISO_CODE']);
+        $nameCol = $this->pickColumn($columns, ['CURRENCY_NAME', 'NAME']);
+        if (! $idCol || (! $codeCol && ! $nameCol)) {
+            return 'USD';
+        }
+
+        $select = [];
+        if ($codeCol) {
+            $select[] = $codeCol.' as currency_code';
+        }
+        if ($nameCol) {
+            $select[] = $nameCol.' as currency_name';
+        }
+        if ($select === []) {
+            return 'USD';
+        }
+
+        $row = $this->db()->table('CURRENCIES')
+            ->selectRaw(implode(', ', $select))
+            ->where($idCol, '=', $resolvedCurrencyNo)
+            ->first();
+        if (! $row) {
+            return 'USD';
+        }
+
+        $code = mb_strtoupper(trim((string) ($row->currency_code ?? $row->CURRENCY_CODE ?? '')));
+        if ($code !== '') {
+            return $code;
+        }
+
+        $name = mb_strtoupper(trim((string) ($row->currency_name ?? $row->CURRENCY_NAME ?? '')));
+        if ($name === '') {
+            return 'USD';
+        }
+        if (str_contains($name, 'RIEL') || str_contains($name, 'RIAL')) {
+            return 'KHR';
+        }
+
+        return $name;
     }
 
     private function normalizedDiscountRate(float $discount): float
