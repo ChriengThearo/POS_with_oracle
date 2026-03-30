@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Support\StaffAuth;
 use Illuminate\Database\QueryException;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
@@ -18,42 +19,6 @@ class ProductController extends Controller
         $q = trim((string) $request->query('q', ''));
         $type = trim((string) $request->query('type', ''));
 
-        $productColumns = $conn->table('USER_TAB_COLUMNS')
-            ->selectRaw('COLUMN_NAME as column_name, DATA_TYPE as data_type')
-            ->where('TABLE_NAME', '=', 'PRODUCTS')
-            ->get()
-            ->mapWithKeys(static function (object $row): array {
-                $name = mb_strtoupper((string) ($row->column_name ?? $row->COLUMN_NAME ?? ''));
-                $type = mb_strtoupper((string) ($row->data_type ?? $row->DATA_TYPE ?? ''));
-
-                return $name !== '' ? [$name => $type] : [];
-            });
-
-        $photoColumn = null;
-        $photoType = null;
-        foreach (['PHOTO', 'IMAGE', 'PRODUCT_PHOTO', 'PRODUCT_IMAGE', 'PHOTO_PATH', 'IMAGE_PATH'] as $candidate) {
-            $upper = mb_strtoupper($candidate);
-            if ($productColumns->has($upper)) {
-                $photoColumn = $upper;
-                $photoType = $productColumns->get($upper);
-                break;
-            }
-        }
-
-        $photoSelect = 'NULL as photo_path';
-        if ($photoColumn) {
-            if ($photoType === 'BLOB') {
-                // Only attempt to read short blobs (likely stored path strings) to avoid ORA-06502.
-                $photoSelect = 'CASE WHEN DBMS_LOB.GETLENGTH(p.'.$photoColumn.') <= 2000
-                    THEN UTL_RAW.CAST_TO_VARCHAR2(DBMS_LOB.SUBSTR(p.'.$photoColumn.', 2000, 1))
-                    ELSE NULL END as photo_path';
-            } elseif ($photoType === 'CLOB') {
-                $photoSelect = 'DBMS_LOB.SUBSTR(p.'.$photoColumn.', 4000, 1) as photo_path';
-            } else {
-                $photoSelect = 'p.'.$photoColumn.' as photo_path';
-            }
-        }
-
         $select = '
                 p.PRODUCT_NO as product_no,
                 p.PRODUCT_NAME as product_name,
@@ -65,7 +30,13 @@ class ProductController extends Controller
                 p.UNIT_MEASURE as unit_measure,
                 p.QTY_ON_HAND as qty_on_hand,
                 p.STATUS as stock_status,
-                '.$photoSelect;
+                (SELECT CASE WHEN pp2.MEDIA IS NOT NULL AND DBMS_LOB.GETLENGTH(pp2.MEDIA) <= 2000
+                    THEN UTL_RAW.CAST_TO_VARCHAR2(DBMS_LOB.SUBSTR(pp2.MEDIA, 2000, 1))
+                    ELSE NULL END
+                 FROM PRODUCT_PHOTO pp2
+                 WHERE pp2.PRODUCT_ID = p.PRODUCT_NO
+                   AND pp2.PHOTO_ID = (SELECT MIN(pp3.PHOTO_ID) FROM PRODUCT_PHOTO pp3 WHERE pp3.PRODUCT_ID = p.PRODUCT_NO)
+                ) as photo_path';
 
         $productsQuery = $conn->table('PRODUCTS as p')
             ->leftJoin('PRODUCT_TYPE as t', 't.PRODUCTTYPE_ID', '=', 'p.PRODUCT_TYPE')
@@ -120,7 +91,13 @@ class ProductController extends Controller
                 a.LOWER_QTY as lower_qty,
                 a.HIGHER_QTY as higher_qty,
                 p.STATUS as stock_status,
-                '.$photoSelect.'
+                (SELECT CASE WHEN pp2.MEDIA IS NOT NULL AND DBMS_LOB.GETLENGTH(pp2.MEDIA) <= 2000
+                    THEN UTL_RAW.CAST_TO_VARCHAR2(DBMS_LOB.SUBSTR(pp2.MEDIA, 2000, 1))
+                    ELSE NULL END
+                 FROM PRODUCT_PHOTO pp2
+                 WHERE pp2.PRODUCT_ID = p.PRODUCT_NO
+                   AND pp2.PHOTO_ID = (SELECT MIN(pp3.PHOTO_ID) FROM PRODUCT_PHOTO pp3 WHERE pp3.PRODUCT_ID = p.PRODUCT_NO)
+                ) as photo_path
             ')
             ->orderBy('p.QTY_ON_HAND')
             ->get();
@@ -524,6 +501,119 @@ class ProductController extends Controller
         ]);
     }
 
+    public function photos(string $productNo): JsonResponse
+    {
+        $rows = DB::connection('oracle')
+            ->table('PRODUCT_PHOTO')
+            ->where('PRODUCT_ID', '=', $productNo)
+            ->selectRaw("PHOTO_ID as photo_id,
+                CASE WHEN MEDIA IS NOT NULL AND DBMS_LOB.GETLENGTH(MEDIA) <= 2000
+                THEN UTL_RAW.CAST_TO_VARCHAR2(DBMS_LOB.SUBSTR(MEDIA, 2000, 1))
+                ELSE NULL END as photo_path")
+            ->orderBy('PHOTO_ID')
+            ->get();
+
+        $photos = $rows
+            ->filter(fn (object $row): bool => trim((string) ($row->photo_path ?? '')) !== '')
+            ->map(function (object $row): array {
+                $path = (string) ($row->photo_path ?? '');
+                $url = str_starts_with($path, 'http://') || str_starts_with($path, 'https://')
+                    ? $path
+                    : asset(ltrim($path, '/'));
+
+                return ['photo_id' => (int) ($row->photo_id ?? 0), 'url' => $url];
+            })
+            ->values();
+
+        return response()->json(['photos' => $photos]);
+    }
+
+    public function uploadPhoto(Request $request, string $productNo): JsonResponse
+    {
+        $request->validate(['photo' => ['required', 'image', 'max:4096']]);
+
+        $exists = DB::connection('oracle')->table('PRODUCTS')->where('PRODUCT_NO', '=', $productNo)->exists();
+        if (! $exists) {
+            return response()->json(['error' => 'Product not found.'], 404);
+        }
+
+        $photoPath = $this->storePhoto($request->file('photo'));
+
+        DB::connection('oracle')->statement(
+            'INSERT INTO PRODUCT_PHOTO (PRODUCT_ID, MEDIA, CREATED_AT, UPDATED_AT)
+             VALUES (:product_id, TO_BLOB(UTL_RAW.CAST_TO_RAW(:media)), SYSTIMESTAMP, SYSTIMESTAMP)',
+            ['product_id' => $productNo, 'media' => $photoPath]
+        );
+
+        $photoId = (int) DB::connection('oracle')
+            ->table('PRODUCT_PHOTO')
+            ->where('PRODUCT_ID', '=', $productNo)
+            ->orderByDesc('PHOTO_ID')
+            ->value('PHOTO_ID');
+
+        return response()->json([
+            'photo_id' => $photoId,
+            'url' => asset($photoPath),
+        ]);
+    }
+
+    public function destroyPhoto(string $productNo, int $photoId): JsonResponse
+    {
+        $deleted = DB::connection('oracle')
+            ->table('PRODUCT_PHOTO')
+            ->where('PRODUCT_ID', '=', $productNo)
+            ->where('PHOTO_ID', '=', $photoId)
+            ->delete();
+
+        if ($deleted === 0) {
+            return response()->json(['error' => 'Photo not found.'], 404);
+        }
+
+        return response()->json(['success' => true]);
+    }
+
+    public function defaultPhoto(string $productNo, int $photoId): JsonResponse
+    {
+        $conn = DB::connection('oracle');
+
+        // Read all paths in current order
+        $rows = $conn->table('PRODUCT_PHOTO')
+            ->where('PRODUCT_ID', '=', $productNo)
+            ->selectRaw("PHOTO_ID as photo_id,
+                CASE WHEN MEDIA IS NOT NULL AND DBMS_LOB.GETLENGTH(MEDIA) <= 2000
+                THEN UTL_RAW.CAST_TO_VARCHAR2(DBMS_LOB.SUBSTR(MEDIA, 2000, 1))
+                ELSE NULL END as photo_path")
+            ->orderBy('PHOTO_ID')
+            ->get()
+            ->filter(fn (object $row): bool => trim((string) ($row->photo_path ?? '')) !== '')
+            ->values();
+
+        $chosen = $rows->firstWhere('photo_id', $photoId);
+        if (! $chosen) {
+            return response()->json(['error' => 'Photo not found.'], 404);
+        }
+
+        // Reorder: chosen first, then the rest in original order
+        $reordered = collect([(string) ($chosen->photo_path)])
+            ->concat(
+                $rows->filter(fn (object $r): bool => (int) ($r->photo_id ?? 0) !== $photoId)
+                    ->map(fn (object $r): string => (string) ($r->photo_path ?? ''))
+            );
+
+        // Delete all then reinsert in new order
+        $conn->table('PRODUCT_PHOTO')->where('PRODUCT_ID', '=', $productNo)->delete();
+
+        foreach ($reordered as $path) {
+            $conn->statement(
+                'INSERT INTO PRODUCT_PHOTO (PRODUCT_ID, MEDIA, CREATED_AT, UPDATED_AT)
+                 VALUES (:product_id, TO_BLOB(UTL_RAW.CAST_TO_RAW(:media)), SYSTIMESTAMP, SYSTIMESTAMP)',
+                ['product_id' => $productNo, 'media' => $path]
+            );
+        }
+
+        return response()->json(['success' => true]);
+    }
+
     public function store(Request $request): RedirectResponse
     {
         $validated = $request->validate([
@@ -549,13 +639,7 @@ class ProductController extends Controller
         }
 
         $photoPath = null;
-        $photoColumn = null;
-        $photoType = null;
         if ($request->hasFile('photo')) {
-            [$photoColumn, $photoType] = $this->productPhotoColumn();
-            if (! $photoColumn) {
-                return back()->with('error', 'Products table does not support photo uploads.');
-            }
             $photoPath = $this->storePhoto($request->file('photo'));
         }
 
@@ -578,23 +662,12 @@ class ProductController extends Controller
                 ]
             );
 
-            if ($photoPath !== null && $photoColumn !== null) {
-                if ($photoType === 'BLOB') {
-                    DB::connection('oracle')->update(
-                        'UPDATE PRODUCTS SET '.$photoColumn.' = TO_BLOB(UTL_RAW.CAST_TO_RAW(:photo)) WHERE PRODUCT_NO = :product_no',
-                        ['photo' => $photoPath, 'product_no' => (string) $validated['product_no']]
-                    );
-                } elseif ($photoType === 'CLOB') {
-                    DB::connection('oracle')->update(
-                        'UPDATE PRODUCTS SET '.$photoColumn.' = TO_CLOB(:photo) WHERE PRODUCT_NO = :product_no',
-                        ['photo' => $photoPath, 'product_no' => (string) $validated['product_no']]
-                    );
-                } else {
-                    DB::connection('oracle')
-                        ->table('PRODUCTS')
-                        ->where('PRODUCT_NO', '=', (string) $validated['product_no'])
-                        ->update([$photoColumn => $photoPath]);
-                }
+            if ($photoPath !== null) {
+                DB::connection('oracle')->statement(
+                    'INSERT INTO PRODUCT_PHOTO (PRODUCT_ID, MEDIA, CREATED_AT, UPDATED_AT)
+                     VALUES (:product_id, TO_BLOB(UTL_RAW.CAST_TO_RAW(:media)), SYSTIMESTAMP, SYSTIMESTAMP)',
+                    ['product_id' => (string) $validated['product_no'], 'media' => $photoPath]
+                );
             }
         } catch (QueryException $e) {
             $message = str_contains($e->getMessage(), 'ORA-00001')
@@ -646,13 +719,7 @@ class ProductController extends Controller
         }
 
         $photoPath = null;
-        $photoColumn = null;
-        $photoType = null;
         if ($request->hasFile('photo')) {
-            [$photoColumn, $photoType] = $this->productPhotoColumn();
-            if (! $photoColumn) {
-                return back()->with('error', 'Products table does not support photo uploads.');
-            }
             $photoPath = $this->storePhoto($request->file('photo'));
         }
 
@@ -673,56 +740,18 @@ class ProductController extends Controller
                         : null,
                 ]);
 
-            if ($photoPath !== null && $photoColumn !== null) {
-                if ($photoType === 'BLOB') {
-                    DB::connection('oracle')->update(
-                        'UPDATE PRODUCTS SET '.$photoColumn.' = TO_BLOB(UTL_RAW.CAST_TO_RAW(:photo)) WHERE PRODUCT_NO = :product_no',
-                        ['photo' => $photoPath, 'product_no' => $productNo]
-                    );
-                } elseif ($photoType === 'CLOB') {
-                    DB::connection('oracle')->update(
-                        'UPDATE PRODUCTS SET '.$photoColumn.' = TO_CLOB(:photo) WHERE PRODUCT_NO = :product_no',
-                        ['photo' => $photoPath, 'product_no' => $productNo]
-                    );
-                } else {
-                    DB::connection('oracle')
-                        ->table('PRODUCTS')
-                        ->where('PRODUCT_NO', '=', $productNo)
-                        ->update([$photoColumn => $photoPath]);
-                }
+            if ($photoPath !== null) {
+                DB::connection('oracle')->statement(
+                    'INSERT INTO PRODUCT_PHOTO (PRODUCT_ID, MEDIA, CREATED_AT, UPDATED_AT)
+                     VALUES (:product_id, TO_BLOB(UTL_RAW.CAST_TO_RAW(:media)), SYSTIMESTAMP, SYSTIMESTAMP)',
+                    ['product_id' => $productNo, 'media' => $photoPath]
+                );
             }
         } catch (QueryException $e) {
             return back()->with('error', 'Failed to update product: '.$e->getMessage());
         }
 
         return back()->with('success', "Product {$productNo} updated.");
-    }
-
-    /**
-     * @return array{0: string|null, 1: string|null}
-     */
-    private function productPhotoColumn(): array
-    {
-        $columns = DB::connection('oracle')
-            ->table('USER_TAB_COLUMNS')
-            ->selectRaw('COLUMN_NAME as column_name, DATA_TYPE as data_type')
-            ->where('TABLE_NAME', '=', 'PRODUCTS')
-            ->get()
-            ->mapWithKeys(static function (object $row): array {
-                $name = mb_strtoupper((string) ($row->column_name ?? $row->COLUMN_NAME ?? ''));
-                $type = mb_strtoupper((string) ($row->data_type ?? $row->DATA_TYPE ?? ''));
-
-                return $name !== '' ? [$name => $type] : [];
-            });
-
-        foreach (['PHOTO', 'IMAGE', 'PRODUCT_PHOTO', 'PRODUCT_IMAGE', 'PHOTO_PATH', 'IMAGE_PATH'] as $candidate) {
-            $upper = mb_strtoupper($candidate);
-            if ($columns->has($upper)) {
-                return [$upper, $columns->get($upper)];
-            }
-        }
-
-        return [null, null];
     }
 
     private function storePhoto(UploadedFile $photo): string

@@ -258,7 +258,11 @@
                 </div>
                 <div>
                     <label for="product_photo">Photo</label>
-                    <input id="product_photo" name="photo" type="file" accept="image/*">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+                        <input id="product_photo" name="photo" type="file" accept="image/*" style="display: none;">
+                        <button type="button" class="btn btn-muted" onclick="document.getElementById('product_photo').click()">Add Photo</button>
+                        <span id="add-photo-filename" class="subtle" style="font-size: 0.85em;"></span>
+                    </div>
                 </div>
                 <div>
                     <label for="product_type">Product Type</label>
@@ -415,13 +419,26 @@
                 @method('PATCH')
 
                 <div class="grid grid-2" id="detail-edit-fields">
-                    <div>
+                    <div style="grid-column: 1 / -1;">
                         <label>Photo</label>
-                        <div style="display: flex; align-items: center; gap: 12px;">
-                            <img id="detail-product-photo" src="" alt="Product photo" style="width: 72px; height: 72px; border-radius: 12px; object-fit: cover; display: none;">
-                            <span class="subtle" id="detail-product-photo-empty">No photo</span>
+                        <div style="display: flex; align-items: center; gap: 10px; margin-top: 8px;">
+                            <button type="button" id="carousel-prev" class="btn btn-muted" style="flex-shrink: 0; font-size: 1.6em; padding: 6px 16px; line-height: 1; display: none;">&#8249;</button>
+                            <div style="flex: 1; display: flex; align-items: center; justify-content: center; min-height: 240px; background: #f3f4f6; border-radius: 14px; overflow: hidden;">
+                                <img id="detail-product-photo" src="" alt="Product photo" style="max-width: 100%; max-height: 240px; object-fit: contain; display: none; border-radius: 14px;">
+                                <span class="subtle" id="detail-product-photo-empty">No photo</span>
+                            </div>
+                            <button type="button" id="carousel-next" class="btn btn-muted" style="flex-shrink: 0; font-size: 1.6em; padding: 6px 16px; line-height: 1; display: none;">&#8250;</button>
                         </div>
-                        <input id="detail-product-photo-input" name="photo" type="file" accept="image/*" style="margin-top: 8px;">
+                        <div id="carousel-indicator" style="text-align: center; font-size: 0.82em; color: #888; margin-top: 5px;"></div>
+                        <div id="carousel-photo-actions" style="display: none; justify-content: center; gap: 8px; margin-top: 8px;">
+                            <button type="button" id="btn-set-default-photo" class="btn btn-muted">Set as Default</button>
+                            <button type="button" id="btn-delete-photo" class="btn btn-muted" style="color: #dc2626;">Delete Photo</button>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 8px; margin-top: 8px;">
+                            <input id="detail-product-photo-input" type="file" accept="image/*" style="display: none;">
+                            <button type="button" class="btn btn-muted" onclick="document.getElementById('detail-product-photo-input').click()">Add Photo</button>
+                            <span id="detail-photo-filename" class="subtle" style="font-size: 0.85em;"></span>
+                        </div>
                     </div>
                     <div>
                         <label>Product Code</label>
@@ -492,7 +509,105 @@
             const detailCode = document.getElementById('detail-product-code');
             const detailPhoto = document.getElementById('detail-product-photo');
             const detailPhotoEmpty = document.getElementById('detail-product-photo-empty');
+            const carouselPrev = document.getElementById('carousel-prev');
+            const carouselNext = document.getElementById('carousel-next');
+            const carouselIndicator = document.getElementById('carousel-indicator');
+            const carouselPhotoActions = document.getElementById('carousel-photo-actions');
+            const btnSetDefault = document.getElementById('btn-set-default-photo');
+            const btnDeletePhoto = document.getElementById('btn-delete-photo');
             const cancelDetail = document.getElementById('cancel-product-detail');
+
+            // Each item: { photo_id: int, url: string }
+            let carouselPhotos = [];
+            let carouselIndex = 0;
+            let currentProductNo = '';
+            let currentRowThumbnail = null; // <img> in the product list row that opened the modal
+
+            function showCarouselPhoto(index) {
+                if (!detailPhoto || !detailPhotoEmpty) return;
+                if (carouselPhotos.length === 0) {
+                    detailPhoto.src = '';
+                    detailPhoto.style.display = 'none';
+                    detailPhotoEmpty.style.display = '';
+                    if (carouselPrev) carouselPrev.style.display = 'none';
+                    if (carouselNext) carouselNext.style.display = 'none';
+                    if (carouselIndicator) carouselIndicator.textContent = '';
+                    if (carouselPhotoActions) carouselPhotoActions.style.display = 'none';
+                    return;
+                }
+                carouselIndex = Math.max(0, Math.min(index, carouselPhotos.length - 1));
+                detailPhoto.src = carouselPhotos[carouselIndex].url;
+                detailPhoto.style.display = '';
+                detailPhotoEmpty.style.display = 'none';
+                const hasMany = carouselPhotos.length > 1;
+                if (carouselPrev) carouselPrev.style.display = hasMany ? '' : 'none';
+                if (carouselNext) carouselNext.style.display = hasMany ? '' : 'none';
+                if (carouselIndicator) carouselIndicator.textContent = hasMany ? `${carouselIndex + 1} / ${carouselPhotos.length}` : '';
+                if (carouselPhotoActions) carouselPhotoActions.style.display = 'flex';
+                // Show/hide Set as Default: hide it if this is already the first (default) photo
+                if (btnSetDefault) btnSetDefault.style.display = carouselIndex === 0 ? 'none' : '';
+            }
+
+            function updateRowThumbnail(url) {
+                if (!currentRowThumbnail) return;
+                if (url) {
+                    currentRowThumbnail.src = url;
+                    currentRowThumbnail.style.display = '';
+                } else {
+                    currentRowThumbnail.src = '';
+                    currentRowThumbnail.style.display = 'none';
+                }
+            }
+
+            if (carouselPrev) carouselPrev.addEventListener('click', () => showCarouselPhoto(carouselIndex - 1));
+            if (carouselNext) carouselNext.addEventListener('click', () => showCarouselPhoto(carouselIndex + 1));
+
+            if (btnDeletePhoto) {
+                btnDeletePhoto.addEventListener('click', () => {
+                    if (carouselPhotos.length === 0) return;
+                    const photo = carouselPhotos[carouselIndex];
+                    if (!confirm('Delete this photo?')) return;
+                    fetch(`/products/${encodeURIComponent(currentProductNo)}/photos/${photo.photo_id}`, {
+                        method: 'DELETE',
+                        headers: { 'X-CSRF-TOKEN': document.querySelector('input[name="_token"]')?.value || '', 'X-Requested-With': 'XMLHttpRequest' }
+                    }).then(r => r.ok ? r.json() : Promise.reject(r))
+                      .then(() => {
+                          const wasDefault = carouselIndex === 0;
+                          carouselPhotos.splice(carouselIndex, 1);
+                          showCarouselPhoto(Math.min(carouselIndex, carouselPhotos.length - 1));
+                          if (wasDefault) {
+                              updateRowThumbnail(carouselPhotos.length > 0 ? carouselPhotos[0].url : null);
+                          }
+                      })
+                      .catch(() => alert('Failed to delete photo.'));
+                });
+            }
+
+            if (btnSetDefault) {
+                btnSetDefault.addEventListener('click', () => {
+                    if (carouselPhotos.length === 0 || carouselIndex === 0) return;
+                    const photo = carouselPhotos[carouselIndex];
+                    fetch(`/products/${encodeURIComponent(currentProductNo)}/photos/${photo.photo_id}/default`, {
+                        method: 'POST',
+                        headers: { 'X-CSRF-TOKEN': document.querySelector('input[name="_token"]')?.value || '', 'X-Requested-With': 'XMLHttpRequest' }
+                    }).then(r => r.ok ? r.json() : Promise.reject(r))
+                      .then(() => {
+                          // Re-fetch to get fresh photo_ids after DB reinsert
+                          return fetch(`/products/${encodeURIComponent(currentProductNo)}/photos`, {
+                              headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                          });
+                      })
+                      .then(r => r.ok ? r.json() : Promise.reject(r))
+                      .then(json => {
+                          if (json && Array.isArray(json.photos) && json.photos.length > 0) {
+                              carouselPhotos = json.photos;
+                              showCarouselPhoto(0);
+                              updateRowThumbnail(carouselPhotos[0].url);
+                          }
+                      })
+                      .catch(() => alert('Failed to set default photo.'));
+                });
+            }
             const closeAlertDetail = document.getElementById('close-alert-detail');
             const alertPhoto = document.getElementById('alert-product-photo');
             const alertPhotoEmpty = document.getElementById('alert-product-photo-empty');
@@ -559,6 +674,8 @@
                     }
 
                     const productNo = data.product_no || '';
+                    currentProductNo = productNo;
+                    currentRowThumbnail = button.closest('tr')?.querySelector('img') || null;
                     if (detailForm) {
                         detailForm.action = updateTemplate.replace('__PRODUCT__', encodeURIComponent(productNo));
                     }
@@ -588,18 +705,23 @@
                         detailCode.textContent = productNo ? `#${productNo}` : '#';
                     }
 
-                    const photoUrl = data.photo_url || '';
-                    if (detailPhoto && detailPhotoEmpty) {
-                        if (photoUrl) {
-                            detailPhoto.src = photoUrl;
-                            detailPhoto.style.display = '';
-                            detailPhotoEmpty.style.display = 'none';
-                        } else {
-                            detailPhoto.src = '';
-                            detailPhoto.style.display = 'none';
-                            detailPhotoEmpty.style.display = '';
-                        }
-                    }
+                    // Reset carousel, show placeholder immediately from cached data
+                    carouselPhotos = data.photo_url ? [{ photo_id: 0, url: data.photo_url }] : [];
+                    carouselIndex = 0;
+                    showCarouselPhoto(0);
+
+                    // Fetch all photos (with IDs) for this product
+                    fetch(`/products/${encodeURIComponent(productNo)}/photos`, {
+                        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                    })
+                        .then(r => r.ok ? r.json() : null)
+                        .then(json => {
+                            if (json && Array.isArray(json.photos) && json.photos.length > 0) {
+                                carouselPhotos = json.photos; // [{photo_id, url}, ...]
+                                showCarouselPhoto(0);
+                            }
+                        })
+                        .catch(() => {});
 
                     if (alertView && detailEditFields) {
                         const showAlert = mode === 'alert';
@@ -654,6 +776,41 @@
                     if (event.target === detailModal) {
                         detailModal.style.display = 'none';
                     }
+                });
+            }
+
+            const addPhotoInput = document.getElementById('product_photo');
+            const addPhotoFilename = document.getElementById('add-photo-filename');
+            if (addPhotoInput && addPhotoFilename) {
+                addPhotoInput.addEventListener('change', () => {
+                    addPhotoFilename.textContent = addPhotoInput.files[0]?.name || '';
+                });
+            }
+
+            const detailPhotoInput = document.getElementById('detail-product-photo-input');
+            const detailPhotoFilename = document.getElementById('detail-photo-filename');
+            if (detailPhotoInput && detailPhotoFilename) {
+                detailPhotoInput.addEventListener('change', () => {
+                    const file = detailPhotoInput.files[0];
+                    if (!file || !currentProductNo) return;
+                    detailPhotoFilename.textContent = 'Uploading...';
+                    const fd = new FormData();
+                    fd.append('photo', file);
+                    fetch(`/products/${encodeURIComponent(currentProductNo)}/photos`, {
+                        method: 'POST',
+                        headers: { 'X-CSRF-TOKEN': document.querySelector('input[name="_token"]')?.value || '', 'X-Requested-With': 'XMLHttpRequest' },
+                        body: fd,
+                    })
+                        .then(r => r.ok ? r.json() : Promise.reject(r))
+                        .then(json => {
+                            detailPhotoFilename.textContent = '';
+                            detailPhotoInput.value = '';
+                            carouselPhotos.push({ photo_id: json.photo_id, url: json.url });
+                            showCarouselPhoto(carouselPhotos.length - 1);
+                        })
+                        .catch(() => {
+                            detailPhotoFilename.textContent = 'Upload failed.';
+                        });
                 });
             }
 

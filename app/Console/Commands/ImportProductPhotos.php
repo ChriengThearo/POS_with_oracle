@@ -37,13 +37,6 @@ class ImportProductPhotos extends Command
             return self::FAILURE;
         }
 
-        [$photoColumn, $photoType] = $this->productPhotoColumn();
-        if (! $photoColumn || ! $photoType) {
-            $this->error('No supported product photo column found.');
-
-            return self::FAILURE;
-        }
-
         $files = $this->loadImageFiles($sourceDir);
         if ($files->isEmpty()) {
             $this->error("No image files found in: {$sourceDir}");
@@ -58,7 +51,7 @@ class ImportProductPhotos extends Command
             return self::FAILURE;
         }
 
-        $products = $this->loadProducts($photoColumn, $photoType);
+        $products = $this->loadProducts();
         if ($products->isEmpty()) {
             $this->error('No product records found.');
 
@@ -97,27 +90,21 @@ class ImportProductPhotos extends Command
                 continue;
             }
 
-            if ($photoType === 'BLOB') {
-                DB::connection('oracle')->update(
-                    'UPDATE PRODUCTS SET '.$photoColumn.' = TO_BLOB(UTL_RAW.CAST_TO_RAW(:photo_path)) WHERE PRODUCT_NO = :product_no',
-                    [
-                        'photo_path' => $photoPath,
-                        'product_no' => $productNo,
-                    ]
-                );
-            } elseif ($photoType === 'CLOB') {
-                DB::connection('oracle')->update(
-                    'UPDATE PRODUCTS SET '.$photoColumn.' = TO_CLOB(:photo_path) WHERE PRODUCT_NO = :product_no',
-                    [
-                        'photo_path' => $photoPath,
-                        'product_no' => $productNo,
-                    ]
+            $exists = DB::connection('oracle')
+                ->table('PRODUCT_PHOTO')
+                ->where('PRODUCT_ID', '=', $productNo)
+                ->exists();
+
+            if ($exists) {
+                DB::connection('oracle')->statement(
+                    'UPDATE PRODUCT_PHOTO SET MEDIA = TO_BLOB(UTL_RAW.CAST_TO_RAW(:media)), UPDATED_AT = SYSTIMESTAMP WHERE PRODUCT_ID = :product_id',
+                    ['media' => $photoPath, 'product_id' => $productNo]
                 );
             } else {
-                DB::connection('oracle')
-                    ->table('PRODUCTS')
-                    ->where('PRODUCT_NO', '=', $productNo)
-                    ->update([$photoColumn => $photoPath]);
+                DB::connection('oracle')->statement(
+                    'INSERT INTO PRODUCT_PHOTO (PRODUCT_ID, MEDIA, CREATED_AT, UPDATED_AT) VALUES (:product_id, TO_BLOB(UTL_RAW.CAST_TO_RAW(:media)), SYSTIMESTAMP, SYSTIMESTAMP)',
+                    ['product_id' => $productNo, 'media' => $photoPath]
+                );
             }
 
             $updated++;
@@ -142,51 +129,17 @@ class ImportProductPhotos extends Command
     }
 
     /**
-     * @return array{0:string|null,1:string|null}
-     */
-    private function productPhotoColumn(): array
-    {
-        $columns = DB::connection('oracle')
-            ->table('USER_TAB_COLUMNS')
-            ->selectRaw('COLUMN_NAME as column_name, DATA_TYPE as data_type')
-            ->where('TABLE_NAME', '=', 'PRODUCTS')
-            ->get()
-            ->mapWithKeys(static function (object $row): array {
-                $name = mb_strtoupper((string) ($row->column_name ?? $row->COLUMN_NAME ?? ''));
-                $type = mb_strtoupper((string) ($row->data_type ?? $row->DATA_TYPE ?? ''));
-
-                return $name !== '' ? [$name => $type] : [];
-            });
-
-        foreach (['PHOTO', 'IMAGE', 'PRODUCT_PHOTO', 'PRODUCT_IMAGE', 'PHOTO_PATH', 'IMAGE_PATH'] as $candidate) {
-            $upper = mb_strtoupper($candidate);
-            if ($columns->has($upper)) {
-                return [$upper, (string) $columns->get($upper)];
-            }
-        }
-
-        return [null, null];
-    }
-
-    /**
      * @return Collection<int, object>
      */
-    private function loadProducts(string $photoColumn, string $photoType): Collection
+    private function loadProducts(): Collection
     {
-        $photoSelect = 'NULL as photo_path';
-        if ($photoType === 'BLOB') {
-            $photoSelect = 'CASE WHEN DBMS_LOB.GETLENGTH(p.'.$photoColumn.') <= 2000
-                THEN UTL_RAW.CAST_TO_VARCHAR2(DBMS_LOB.SUBSTR(p.'.$photoColumn.', 2000, 1))
-                ELSE NULL END as photo_path';
-        } elseif ($photoType === 'CLOB') {
-            $photoSelect = 'DBMS_LOB.SUBSTR(p.'.$photoColumn.', 4000, 1) as photo_path';
-        } else {
-            $photoSelect = 'p.'.$photoColumn.' as photo_path';
-        }
-
         return DB::connection('oracle')
             ->table('PRODUCTS as p')
-            ->selectRaw('p.PRODUCT_NO as product_no, p.PRODUCT_NAME as product_name, '.$photoSelect)
+            ->leftJoin('PRODUCT_PHOTO as pp', 'pp.PRODUCT_ID', '=', 'p.PRODUCT_NO')
+            ->selectRaw("p.PRODUCT_NO as product_no, p.PRODUCT_NAME as product_name,
+                CASE WHEN pp.MEDIA IS NOT NULL AND DBMS_LOB.GETLENGTH(pp.MEDIA) <= 2000
+                    THEN UTL_RAW.CAST_TO_VARCHAR2(DBMS_LOB.SUBSTR(pp.MEDIA, 2000, 1))
+                    ELSE NULL END as photo_path")
             ->orderBy('p.PRODUCT_NO')
             ->get();
     }

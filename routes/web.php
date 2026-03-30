@@ -245,6 +245,18 @@ Route::middleware('staff.auth')->group(function (): void {
     Route::get('/products/status/future', [ProductController::class, 'future'])
         ->middleware('staff.ability:future-stock.read')
         ->name('products.status.future');
+    Route::get('/products/{productNo}/photos', [ProductController::class, 'photos'])
+        ->middleware('staff.ability:products.read')
+        ->name('products.photos');
+    Route::post('/products/{productNo}/photos', [ProductController::class, 'uploadPhoto'])
+        ->middleware('staff.ability:products.manage')
+        ->name('products.photos.upload');
+    Route::delete('/products/{productNo}/photos/{photoId}', [ProductController::class, 'destroyPhoto'])
+        ->middleware('staff.ability:products.manage')
+        ->name('products.photos.destroy');
+    Route::post('/products/{productNo}/photos/{photoId}/default', [ProductController::class, 'defaultPhoto'])
+        ->middleware('staff.ability:products.manage')
+        ->name('products.photos.default');
     Route::post('/products', [ProductController::class, 'store'])
         ->middleware('staff.ability:products.manage')
         ->name('products.store');
