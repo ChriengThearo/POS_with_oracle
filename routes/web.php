@@ -275,6 +275,12 @@ Route::middleware('staff.auth')->group(function (): void {
     Route::patch('/product-types/{typeId}', [ProductController::class, 'updateType'])
         ->middleware('staff.ability:product-types.manage')
         ->name('product-types.update');
+    Route::delete('/product-types/{typeId}', [ProductController::class, 'deleteType'])
+        ->middleware('staff.ability:product-types.manage')
+        ->name('product-types.delete');
+    Route::get('/product-types/{typeId}/check-usage', [ProductController::class, 'checkTypeUsage'])
+        ->middleware('staff.ability:product-types.manage')
+        ->name('product-types.check-usage');
 
     Route::get('/oracle/deep-check', [EcommerceController::class, 'deepCheck'])
         ->middleware('staff.ability:system.audit')

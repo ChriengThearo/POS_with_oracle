@@ -33,10 +33,10 @@
             </article>
         </div>
 
-        <form method="GET" action="{{ route('products.index') }}" class="field-grid" style="margin-top: 14px;">
+        <div class="field-grid" style="margin-top: 14px;">
             <div>
                 <label for="q">Search product / code / type</label>
-                <input id="q" type="text" name="q" value="{{ $q }}" placeholder="e.g. P0001 or Laptop">
+                <input id="q" type="text" name="q" value="{{ $q }}" placeholder="e.g. P0001 or Laptop" autocomplete="off">
             </div>
             <div>
                 <label for="type">Product type</label>
@@ -49,11 +49,7 @@
                     @endforeach
                 </select>
             </div>
-            <div class="actions" style="align-items: end;">
-                <button type="submit" class="btn btn-primary">Search</button>
-                <a href="{{ route('products.index') }}" class="btn btn-muted">Reset</a>
-            </div>
-        </form>
+        </div>
     </section>
 
     <section class="card" style="margin-top: 14px;">
@@ -68,7 +64,6 @@
                         <button type="button" class="btn btn-muted" id="show-alert-stocks">Alert Stock</button>
                     @endif
                 </div>
-                <span class="subtle">Use the buttons to switch between product sections.</span>
             </div>
         </section>
 
@@ -117,7 +112,7 @@
                                 'photo_url' => (string) $photoUrl,
                             ];
                         @endphp
-                        <tr>
+                        <tr data-type-id="{{ $product->product_type_id }}">
                             <td>
                                 @if($photoUrl !== '')
                                     <img src="{{ $photoUrl }}" alt="Product photo" style="width: 46px; height: 46px; border-radius: 10px; object-fit: cover;">
@@ -126,7 +121,7 @@
                                 @endif
                             </td>
                             <td>{{ $product->product_name }}</td>
-                            <td>{{ $product->product_type_name ?? 'N/A' }}</td>
+                            <td class="product-type-cell">{{ $product->product_type_name ?? 'N/A' }}</td>
                             <td>
                                 <div>Sell Price: ${{ number_format((float) $product->sell_price, 2) }}</div>
                                 <div class="subtle">Cost Price: ${{ number_format((float) $product->cost_price, 2) }}</div>
@@ -275,11 +270,12 @@
         <section class="card" id="product-add-panel" style="display: none;">
             <h2 style="margin-top: 0;">Add Product</h2>
             <p class="subtle">Create a new product record.</p>
-            <form method="POST" action="{{ route('products.store') }}" class="field-grid" style="margin-top: 12px;" enctype="multipart/form-data">
+            <div id="add-product-message" style="display:none; margin-top:10px;"></div>
+            <form id="add-product-form" method="POST" action="{{ route('products.store') }}" class="field-grid" style="margin-top: 12px;" enctype="multipart/form-data">
                 @csrf
                 <div>
                     <label for="product_no">Product Code</label>
-                    <input id="product_no" name="product_no" type="text" required>
+                    <input id="product_no" name="product_no" type="text" value="{{ $nextProductCode }}" required>
                 </div>
                 <div>
                     <label for="product_name">Product Name</label>
@@ -303,7 +299,7 @@
                 </div>
                 <div>
                     <label for="unit_measure">Unit Measure</label>
-                    <input id="unit_measure" name="unit_measure" type="text" required>
+                    <input id="unit_measure" name="unit_measure" type="text" value="PCS" required>
                 </div>
                 <div>
                     <label for="sell_price">Sell Price</label>
@@ -323,11 +319,22 @@
                 </div>
                 <input id="status" name="status" type="hidden" value="">
                 <div class="actions" style="align-items: end;">
-                    <button type="submit" class="btn btn-primary">Create</button>
+                    <button type="submit" id="add-product-btn" class="btn btn-primary">Create</button>
                 </div>
             </form>
         </section>
         @endif
+
+        <div id="type-save-confirm-modal" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.5); z-index:100; align-items:center; justify-content:center;">
+            <div class="card" style="max-width:380px; width:100%; margin:auto;">
+                <h3 style="margin-top:0;">Are you sure?</h3>
+                <p id="type-save-confirm-desc" class="subtle" style="margin-bottom:20px;"></p>
+                <div class="actions" style="justify-content:flex-end; gap:8px;">
+                    <button type="button" class="btn btn-muted" id="type-save-cancel-btn">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="type-save-confirm-btn">Yes</button>
+                </div>
+            </div>
+        </div>
 
         <section class="card" id="product-types-panel" style="display: none;">
             <div style="margin-top: 18px;">
@@ -336,16 +343,20 @@
             </div>
 
             @if($canManageTypes)
-                <form method="POST" action="{{ route('product-types.create') }}" class="field-grid" style="margin-top: 12px;">
-                    @csrf
+                <div class="field-grid" style="margin-top: 12px; grid-template-columns: 1fr 1fr auto;" id="add-type-form-wrap">
                     <div>
-                        <label for="type_name">Type name</label>
-                        <input id="type_name" name="type_name" type="text" required>
+                        <label for="type_name_input">Type name</label>
+                        <input id="type_name_input" type="text">
+                    </div>
+                    <div>
+                        <label for="type_remarks_input">Remarks <span class="subtle">(optional)</span></label>
+                        <input id="type_remarks_input" type="text" maxlength="255">
                     </div>
                     <div class="actions" style="align-items: end;">
-                        <button type="submit" class="btn btn-primary">Add Type</button>
+                        <button type="button" class="btn btn-primary" id="add-type-btn">Add Type</button>
                     </div>
-                </form>
+                </div>
+                <div id="type-form-msg" style="display:none; margin-top: 8px;"></div>
             @endif
 
             <div class="table-wrap" style="margin-top: 12px;">
@@ -354,35 +365,55 @@
                     <tr>
                         <th>ID</th>
                         <th>Type</th>
+                        <th>Remarks</th>
                         <th>Action</th>
                     </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="product-types-tbody">
                     @forelse($types as $type)
-                        <tr>
+                        <tr id="type-row-{{ $type->id }}" data-id="{{ $type->id }}">
                             <td>{{ $type->id }}</td>
                             <td>
                                 @if($canManageTypes)
-                                    <input type="text" form="type-{{ $type->id }}" name="type_name" value="{{ $type->name }}">
+                                    <input
+                                        type="text"
+                                        value="{{ $type->name }}"
+                                        data-original="{{ $type->name }}"
+                                        class="type-name-input"
+                                        data-id="{{ $type->id }}"
+                                        data-update-url="{{ route('product-types.update', ['typeId' => (int) $type->id]) }}"
+                                    >
                                 @else
                                     {{ $type->name }}
                                 @endif
                             </td>
                             <td>
                                 @if($canManageTypes)
-                                    <form id="type-{{ $type->id }}" method="POST" action="{{ route('product-types.update', ['typeId' => (int) $type->id]) }}">
-                                        @csrf
-                                        @method('PATCH')
-                                        <button type="submit" class="btn btn-muted">Save</button>
-                                    </form>
+                                    <input
+                                        type="text"
+                                        value="{{ $type->remarks ?? '' }}"
+                                        data-original="{{ $type->remarks ?? '' }}"
+                                        class="type-remarks-input"
+                                        data-id="{{ $type->id }}"
+                                        maxlength="255"
+                                        placeholder="—"
+                                    >
+                                @else
+                                    {{ $type->remarks ?? '—' }}
+                                @endif
+                            </td>
+                            <td>
+                                @if($canManageTypes)
+                                    <button type="button" class="btn btn-primary type-save-btn" data-id="{{ $type->id }}" style="display:none;">Save</button>
+                                    <button type="button" class="btn btn-muted type-delete-btn" data-id="{{ $type->id }}" data-delete-url="{{ route('product-types.delete', ['typeId' => (int) $type->id]) }}">Delete</button>
                                 @else
                                     <span class="subtle">Read only</span>
                                 @endif
                             </td>
                         </tr>
                     @empty
-                        <tr>
-                            <td colspan="3" class="subtle">No product types found.</td>
+                        <tr id="types-empty-row">
+                            <td colspan="4" class="subtle">No product types found.</td>
                         </tr>
                     @endforelse
                     </tbody>
@@ -992,6 +1023,177 @@
                 });
             }
 
+            // --- AJAX product search ---
+            const productTableBody   = document.querySelector('#product-list-panel tbody');
+            const productTotalChip   = document.querySelector('#product-list-panel .chip');
+            const productPager       = document.querySelector('#product-list-panel .pager');
+            const searchUrl          = '{{ route('products.index') }}';
+            const detailTemplate     = detailForm ? detailForm.dataset.updateTemplate || '' : '';
+
+            function buildRow(p) {
+                const photoCell = p.photo_url
+                    ? `<img src="${p.photo_url}" alt="Product photo" style="width:46px;height:46px;border-radius:10px;object-fit:cover;">`
+                    : `<span class="subtle">No photo</span>`;
+                const actionCell = p.can_manage
+                    ? `<button type="button" class="btn btn-muted js-product-detail" data-product='${JSON.stringify(p).replace(/'/g,"&#39;")}'>Detail</button>`
+                    : `<span class="subtle">Read only</span>`;
+                const sellPrice    = parseFloat(p.sell_price) || 0;
+                const costPrice    = parseFloat(p.cost_price) || 0;
+                const profitPct    = parseFloat(p.profit_percent) || 0;
+                return `<tr data-type-id="${escHtml(String(p.product_type_id || ''))}">
+                    <td>${photoCell}</td>
+                    <td>${escHtml(p.product_name)}</td>
+                    <td class="product-type-cell">${escHtml(p.product_type_name || 'N/A')}</td>
+                    <td>
+                        <div>Sell Price: $${sellPrice.toFixed(2)}</div>
+                        <div class="subtle">Cost Price: $${costPrice.toFixed(2)}</div>
+                        <div class="subtle">Profit: ${profitPct.toFixed(2)}%</div>
+                    </td>
+                    <td>${parseInt(p.qty_on_hand) || 0} Pieces</td>
+                    <td>${escHtml(p.stock_status || 'N/A')}</td>
+                    <td>${actionCell}</td>
+                </tr>`;
+            }
+
+            function escHtml(str) {
+                return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+            }
+
+            function attachDetailListeners() {
+                document.querySelectorAll('#product-list-panel .js-product-detail').forEach((button) => {
+                    button.addEventListener('click', () => {
+                        if (!detailModal || !detailForm) return;
+                        let data = {};
+                        try { data = JSON.parse(button.getAttribute('data-product')); } catch (_) { return; }
+                        if (modalTitle) modalTitle.textContent = 'Product Detail';
+                        currentProductNo = data.product_no || '';
+                        currentRowThumbnail = button.closest('tr')?.querySelector('img') || null;
+                        currentAlertRow = null;
+                        currentAlertButton = null;
+                        if (detailForm) detailForm.action = detailTemplate.replace('__PRODUCT__', encodeURIComponent(currentProductNo));
+                        const setValue = (id, value) => { const el = document.getElementById(id); if (el) el.value = value ?? ''; };
+                        setValue('detail-product-no', currentProductNo);
+                        setValue('detail-product-name', data.product_name || '');
+                        setValue('detail-sell-price', data.sell_price ?? '');
+                        setValue('detail-cost-price', data.cost_price ?? '');
+                        setValue('detail-profit-percent', data.profit_percent ?? '');
+                        setValue('detail-qty', data.qty_on_hand ?? '');
+                        setValue('detail-unit', data.unit_measure || '');
+                        setValue('detail-status', data.stock_status || '');
+                        const typeSelect = document.getElementById('detail-product-type');
+                        if (typeSelect) typeSelect.value = data.product_type_id ?? '';
+                        if (detailCode) detailCode.textContent = currentProductNo ? `#${currentProductNo}` : '#';
+                        carouselPhotos = data.photo_url ? [{ photo_id: 0, url: data.photo_url }] : [];
+                        carouselIndex = 0;
+                        showCarouselPhoto(0);
+                        fetch(`/products/${encodeURIComponent(currentProductNo)}/photos`, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+                            .then(r => r.ok ? r.json() : null)
+                            .then(json => { if (json && Array.isArray(json.photos) && json.photos.length > 0) { carouselPhotos = json.photos; showCarouselPhoto(0); } })
+                            .catch(() => {});
+                        if (alertView && detailEditFields) {
+                            alertView.style.display = 'none';
+                            detailEditFields.style.display = '';
+                            if (detailForm) detailForm.style.display = '';
+                        }
+                        detailModal.style.display = '';
+                    });
+                });
+            }
+
+            let ajaxTimer = null;
+            function doSearch() {
+                const q = document.getElementById('q')?.value || '';
+                const type = document.getElementById('type')?.value || '';
+                const url = `${searchUrl}?q=${encodeURIComponent(q)}&type=${encodeURIComponent(type)}`;
+                fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+                    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+                    .then(({ products, total, pagination }) => {
+                        if (!productTableBody) return;
+                        if (!products || products.length === 0) {
+                            productTableBody.innerHTML = '<tr><td colspan="7" class="subtle">No products found.</td></tr>';
+                        } else {
+                            productTableBody.innerHTML = products.map(buildRow).join('');
+                            attachDetailListeners();
+                        }
+                        if (productTotalChip) productTotalChip.textContent = `${total} total`;
+                        if (productPager) productPager.innerHTML = pagination;
+                    })
+                    .catch((err) => { console.error('Product search failed', err); });
+            }
+
+            document.getElementById('q')?.addEventListener('input', () => {
+                clearTimeout(ajaxTimer);
+                ajaxTimer = setTimeout(doSearch, 350);
+            });
+            document.getElementById('type')?.addEventListener('change', () => {
+                clearTimeout(ajaxTimer);
+                doSearch();
+            });
+            // --- end AJAX product search ---
+
+            // --- AJAX add product ---
+            const addProductForm = document.getElementById('add-product-form');
+            const addProductBtn  = document.getElementById('add-product-btn');
+            const addProductMsg  = document.getElementById('add-product-message');
+
+            if (addProductForm) {
+                addProductForm.addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    addProductBtn.disabled = true;
+                    addProductBtn.textContent = 'Creating…';
+                    if (addProductMsg) { addProductMsg.style.display = 'none'; addProductMsg.textContent = ''; }
+
+                    const fd = new FormData(addProductForm);
+                    fetch(addProductForm.action, {
+                        method: 'POST',
+                        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                        body: fd,
+                    })
+                        .then(r => r.json().then(json => ({ ok: r.ok, json })))
+                        .then(({ ok, json }) => {
+                            if (!ok) {
+                                if (addProductMsg) {
+                                    addProductMsg.textContent = json.error || 'Failed to create product.';
+                                    addProductMsg.style.display = '';
+                                    addProductMsg.style.color = '#dc2626';
+                                }
+                                return;
+                            }
+                            // Reset form fields
+                            addProductForm.reset();
+                            // Set next product code
+                            const codeInput = document.getElementById('product_no');
+                            if (codeInput && json.next_product_code) codeInput.value = json.next_product_code;
+                            // Restore unit measure default
+                            const unitInput = document.getElementById('unit_measure');
+                            if (unitInput) unitInput.value = 'PCS';
+                            // Clear photo filename
+                            const addFilename = document.getElementById('add-photo-filename');
+                            if (addFilename) addFilename.textContent = '';
+                            // Show success
+                            if (addProductMsg) {
+                                addProductMsg.textContent = json.success || 'Product created.';
+                                addProductMsg.style.display = '';
+                                addProductMsg.style.color = '#16a34a';
+                            }
+                            // Refresh the product list
+                            doSearch();
+                        })
+                        .catch(() => {
+                            if (addProductMsg) {
+                                addProductMsg.textContent = 'An unexpected error occurred.';
+                                addProductMsg.style.display = '';
+                                addProductMsg.style.color = '#dc2626';
+                            }
+                        })
+                        .finally(() => {
+                            addProductBtn.disabled = false;
+                            addProductBtn.textContent = 'Create';
+                        });
+                });
+            }
+            // --- end AJAX add product ---
+
             const updateProfit = () => {
                 if (!sellPriceInput || !costPriceInput || !profitInput) return;
                 const sell = Number(sellPriceInput.value || 0);
@@ -1009,6 +1211,292 @@
                 costPriceInput.addEventListener('input', updateProfit);
                 updateProfit();
             }
+
+            // --- Product Types AJAX ---
+            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '{{ csrf_token() }}';
+            const typeFormMsg = document.getElementById('type-form-msg');
+            const typesTbody  = document.getElementById('product-types-tbody');
+
+            // --- type save confirmation modal ---
+            const typeSaveModal      = document.getElementById('type-save-confirm-modal');
+            const typeSaveConfirmBtn = document.getElementById('type-save-confirm-btn');
+            const typeSaveCancelBtn  = document.getElementById('type-save-cancel-btn');
+            const typeSaveConfirmDesc = document.getElementById('type-save-confirm-desc');
+            let pendingSaveCallback  = null;
+            let typeSaveModalOpen    = false;
+
+            function confirmTypeSave(callback, description) {
+                pendingSaveCallback  = callback;
+                typeSaveModalOpen    = true;
+                if (typeSaveConfirmDesc) typeSaveConfirmDesc.textContent = description ?? '';
+                typeSaveModal.style.display = 'flex';
+            }
+
+            function closeTypeSaveModal() {
+                typeSaveModalOpen = false;
+                typeSaveModal.style.display = 'none';
+            }
+
+            typeSaveConfirmBtn?.addEventListener('click', () => {
+                closeTypeSaveModal();
+                if (pendingSaveCallback) { pendingSaveCallback(); pendingSaveCallback = null; }
+            });
+            typeSaveCancelBtn?.addEventListener('click', () => {
+                closeTypeSaveModal();
+                pendingSaveCallback = null;
+            });
+            typeSaveModal?.addEventListener('click', (e) => {
+                if (e.target === typeSaveModal) {
+                    closeTypeSaveModal();
+                    pendingSaveCallback = null;
+                }
+            });
+            // --- end type save confirmation modal ---
+
+            function updateProductTypeInList(typeId, newName) {
+                document.querySelectorAll(`tr[data-type-id="${typeId}"] .product-type-cell`)
+                    .forEach(td => { td.textContent = newName; });
+            }
+
+            function showTypeMsg(msg, isError) {
+                if (!typeFormMsg) return;
+                typeFormMsg.textContent = msg;
+                typeFormMsg.style.display = '';
+                typeFormMsg.style.color = isError ? '#dc2626' : '#16a34a';
+                clearTimeout(typeFormMsg._t);
+                typeFormMsg._t = setTimeout(() => { typeFormMsg.style.display = 'none'; }, 3500);
+            }
+
+            function esc(str) {
+                return String(str ?? '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            }
+
+            function buildTypeRow(id, name, remarks) {
+                const tr = document.createElement('tr');
+                tr.id = 'type-row-' + id;
+                tr.dataset.id = id;
+                tr.innerHTML = `
+                    <td>${id}</td>
+                    <td><input type="text" value="${esc(name)}" data-original="${esc(name)}"
+                        class="type-name-input" data-id="${id}"
+                        data-update-url="/product-types/${id}"></td>
+                    <td><input type="text" value="${esc(remarks)}" data-original="${esc(remarks)}"
+                        class="type-remarks-input" data-id="${id}" maxlength="255" placeholder="—"></td>
+                    <td>
+                        <button type="button" class="btn btn-primary type-save-btn" data-id="${id}" style="display:none;">Save</button>
+                        <button type="button" class="btn btn-muted type-delete-btn" data-id="${id}" data-delete-url="/product-types/${id}">Delete</button>
+                    </td>`;
+                bindTypeRow(tr);
+                return tr;
+            }
+
+            function bindTypeRow(tr) {
+                const nameInput   = tr.querySelector('.type-name-input');
+                const remarkInput = tr.querySelector('.type-remarks-input');
+                const saveBtn     = tr.querySelector('.type-save-btn');
+                const deleteBtn   = tr.querySelector('.type-delete-btn');
+                if (!nameInput) return;
+
+                function checkChanged() {
+                    const changed = nameInput.value !== nameInput.dataset.original
+                                 || (remarkInput && remarkInput.value !== remarkInput.dataset.original);
+                    saveBtn.style.display   = changed ? '' : 'none';
+                    deleteBtn.style.display = changed ? 'none' : '';
+                }
+
+                nameInput.addEventListener('input', checkChanged);
+                if (remarkInput) remarkInput.addEventListener('input', checkChanged);
+
+                function onBlur() {
+                    setTimeout(() => {
+                        if (typeSaveModalOpen) return; // modal is handling it — don't revert
+                        const active = document.activeElement;
+                        if (active !== nameInput && active !== remarkInput && active !== saveBtn) {
+                            if (saveBtn.style.display !== 'none') {
+                                nameInput.value  = nameInput.dataset.original;
+                                if (remarkInput) remarkInput.value = remarkInput.dataset.original;
+                                saveBtn.style.display   = 'none';
+                                deleteBtn.style.display = '';
+                            }
+                        }
+                    }, 150);
+                }
+
+                nameInput.addEventListener('blur', onBlur);
+                if (remarkInput) remarkInput.addEventListener('blur', onBlur);
+                saveBtn.addEventListener('mousedown', (e) => e.preventDefault());
+
+                saveBtn.addEventListener('click', () => {
+                    const newName    = nameInput.value.trim();
+                    const newRemarks = remarkInput ? remarkInput.value.trim() : '';
+                    if (!newName) { nameInput.focus(); return; }
+
+                    confirmTypeSave(() => {
+                    saveBtn.disabled = true;
+                    saveBtn.textContent = 'Saving…';
+
+
+
+                    const fd = new FormData();
+                    fd.append('_method', 'PATCH');
+                    fd.append('_token', csrfToken);
+                    fd.append('type_name', newName);
+                    fd.append('remarks', newRemarks);
+
+                    fetch(nameInput.dataset.updateUrl, {
+                        method: 'POST',
+                        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                        body: fd,
+                    })
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            nameInput.value            = newName;
+                            nameInput.dataset.original = newName;
+                            if (remarkInput) { remarkInput.value = newRemarks; remarkInput.dataset.original = newRemarks; }
+                            saveBtn.style.display   = 'none';
+                            deleteBtn.style.display = '';
+                            updateProductTypeInList(nameInput.dataset.id, newName);
+                            showTypeMsg('Updated successfully.', false);
+                        } else {
+                            showTypeMsg(data.error || 'Failed to update.', true);
+                        }
+                    })
+                    .catch(() => showTypeMsg('An error occurred.', true))
+                    .finally(() => {
+                        saveBtn.disabled = false;
+                        saveBtn.textContent = 'Save';
+                    });
+                    }, 'Every product that uses this data will also change.'); // end confirmTypeSave
+                });
+
+                deleteBtn.addEventListener('click', () => {
+                    deleteBtn.disabled = true;
+                    deleteBtn.textContent = 'Checking…';
+
+                    fetch(deleteBtn.dataset.deleteUrl.replace(/\/(\d+)$/, '/$1/check-usage'), {
+                        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                    })
+                    .then(r => r.json())
+                    .then(check => {
+                        if (check.in_use) {
+                            showTypeMsg('Cannot delete because this data is used by another product.', true);
+                            deleteBtn.disabled = false;
+                            deleteBtn.textContent = 'Delete';
+                            return;
+                        }
+
+                        confirmTypeSave(() => {
+                            deleteBtn.disabled = true;
+                            deleteBtn.textContent = 'Deleting…';
+
+
+                            const fd = new FormData();
+                            fd.append('_method', 'DELETE');
+                            fd.append('_token', csrfToken);
+
+                            fetch(deleteBtn.dataset.deleteUrl, {
+                                method: 'POST',
+                                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                                body: fd,
+                            })
+                            .then(r => r.json())
+                            .then(data => {
+                                if (data.success) {
+                                    tr.style.transition = 'opacity 0.25s';
+                                    tr.style.opacity = '0';
+                                    setTimeout(() => {
+                                        tr.remove();
+                                        if (!typesTbody.querySelector('tr[data-id]')) {
+                                            const emptyTr = document.createElement('tr');
+                                            emptyTr.id = 'types-empty-row';
+                                            emptyTr.innerHTML = '<td colspan="4" class="subtle">No product types found.</td>';
+                                            typesTbody.appendChild(emptyTr);
+                                        }
+                                    }, 260);
+                                    showTypeMsg('Deleted successfully.', false);
+                                } else {
+                                    showTypeMsg(data.error || 'Failed to delete.', true);
+                                    deleteBtn.disabled = false;
+                                    deleteBtn.textContent = 'Delete';
+                                }
+                            })
+                            .catch(() => {
+                                showTypeMsg('An error occurred.', true);
+                                deleteBtn.disabled = false;
+                                deleteBtn.textContent = 'Delete';
+                            });
+                        }, 'Are you sure you want to delete this type?');
+
+                        // if user cancels the modal, re-enable the button
+                        typeSaveCancelBtn?.addEventListener('click', function onCancel() {
+                            deleteBtn.disabled = false;
+                            deleteBtn.textContent = 'Delete';
+                            typeSaveCancelBtn.removeEventListener('click', onCancel);
+                        }, { once: true });
+                    })
+                    .catch(() => {
+                        showTypeMsg('An error occurred.', true);
+                        deleteBtn.disabled = false;
+                        deleteBtn.textContent = 'Delete';
+                    });
+                });
+            }
+
+            // Bind existing rows
+            document.querySelectorAll('#product-types-tbody tr[data-id]').forEach(tr => bindTypeRow(tr));
+
+            // Add Type
+            const addTypeBtn      = document.getElementById('add-type-btn');
+            const addTypeInput    = document.getElementById('type_name_input');
+            const addRemarksInput = document.getElementById('type_remarks_input');
+            if (addTypeBtn && addTypeInput) {
+                addTypeBtn.addEventListener('click', () => {
+                    const name    = addTypeInput.value.trim();
+                    const remarks = addRemarksInput ? addRemarksInput.value.trim() : '';
+                    if (!name) { addTypeInput.focus(); return; }
+                    addTypeBtn.disabled = true;
+                    addTypeBtn.textContent = 'Adding…';
+
+                    const fd = new FormData();
+                    fd.append('_token', csrfToken);
+                    fd.append('type_name', name);
+                    fd.append('remarks', remarks);
+
+                    fetch('{{ route('product-types.create') }}', {
+                        method: 'POST',
+                        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                        body: fd,
+                    })
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            const emptyRow = document.getElementById('types-empty-row');
+                            if (emptyRow) emptyRow.remove();
+                            const tr = buildTypeRow(data.id, data.name, data.remarks ?? '');
+                            tr.style.opacity = '0';
+                            tr.style.transition = 'opacity 0.25s';
+                            typesTbody.appendChild(tr);
+                            requestAnimationFrame(() => { tr.style.opacity = '1'; });
+                            addTypeInput.value = '';
+                            if (addRemarksInput) addRemarksInput.value = '';
+                            showTypeMsg('Type added successfully.', false);
+                        } else {
+                            showTypeMsg(data.error || 'Failed to add type.', true);
+                        }
+                    })
+                    .catch(() => showTypeMsg('An error occurred.', true))
+                    .finally(() => {
+                        addTypeBtn.disabled = false;
+                        addTypeBtn.textContent = 'Add Type';
+                    });
+                });
+
+                addTypeInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') addTypeBtn.click();
+                });
+            }
+            // --- end Product Types AJAX ---
         });
     </script>
 @endsection

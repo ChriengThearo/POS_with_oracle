@@ -13,7 +13,7 @@ use Illuminate\View\View;
 
 class ProductController extends Controller
 {
-    public function index(Request $request): View
+    public function index(Request $request): View|JsonResponse
     {
         $conn = DB::connection('oracle');
         $q = trim((string) $request->query('q', ''));
@@ -61,8 +61,43 @@ class ProductController extends Controller
             ->paginate(15)
             ->appends($request->query());
 
+        if ($request->ajax()) {
+            $canManageProducts = StaffAuth::can('products.manage');
+            $items = $products->map(function (object $product) use ($canManageProducts): array {
+                $profitDisplay = (float) $product->profit_percent;
+                if ($profitDisplay > 0 && $profitDisplay <= 1) {
+                    $profitDisplay *= 100;
+                }
+                $photoPath = (string) ($product->photo_path ?? '');
+                $isHttpPhoto = $photoPath !== '' && str_starts_with($photoPath, 'http');
+                $isLocalPhoto = $photoPath !== '' && (str_starts_with($photoPath, 'images/') || str_starts_with($photoPath, '/images/'));
+                $photoUrl = $isHttpPhoto ? $photoPath : ($isLocalPhoto ? asset(ltrim($photoPath, '/')) : '');
+
+                return [
+                    'product_no'       => (string) $product->product_no,
+                    'product_name'     => (string) $product->product_name,
+                    'product_type_id'  => (string) $product->product_type_id,
+                    'product_type_name'=> (string) ($product->product_type_name ?? ''),
+                    'sell_price'       => (float) $product->sell_price,
+                    'cost_price'       => (float) $product->cost_price,
+                    'profit_percent'   => (float) $profitDisplay,
+                    'qty_on_hand'      => (int) $product->qty_on_hand,
+                    'unit_measure'     => (string) $product->unit_measure,
+                    'stock_status'     => (string) ($product->stock_status ?? ''),
+                    'photo_url'        => $photoUrl,
+                    'can_manage'       => $canManageProducts,
+                ];
+            });
+
+            return response()->json([
+                'products'    => $items,
+                'total'       => $products->total(),
+                'pagination'  => (string) $products->links('pagination.orbit')->render(),
+            ]);
+        }
+
         $types = $conn->table('PRODUCT_TYPE')
-            ->selectRaw('PRODUCTTYPE_ID as id, PRODUCTYPE_NAME as name')
+            ->selectRaw('PRODUCTTYPE_ID as id, PRODUCTYPE_NAME as name, REMARKS as remarks')
             ->orderBy('PRODUCTYPE_NAME')
             ->get();
 
@@ -102,6 +137,16 @@ class ProductController extends Controller
             ->orderBy('p.PRODUCT_NAME')
             ->get();
 
+        $lastCode = $conn->table('PRODUCTS')
+            ->selectRaw('MAX(PRODUCT_NO) as last_code')
+            ->value('last_code');
+        $nextProductCode = 'P0001';
+        if ($lastCode !== null) {
+            $digits = preg_replace('/\D/', '', (string) $lastCode);
+            $num = (int) $digits;
+            $nextProductCode = 'P'.str_pad($num + 1, strlen($digits), '0', STR_PAD_LEFT);
+        }
+
         return view('products.index', [
             'products' => $products,
             'types' => $types,
@@ -113,6 +158,7 @@ class ProductController extends Controller
             'canManageTypes' => StaffAuth::can('product-types.manage'),
             'canManageStockStatus' => StaffAuth::can('stock-status.manage'),
             'underStockCount' => (int) $metrics['understock'],
+            'nextProductCode' => $nextProductCode,
         ]);
     }
 
@@ -275,7 +321,7 @@ class ProductController extends Controller
             ->values();
 
         $types = $conn->table('PRODUCT_TYPE')
-            ->selectRaw('PRODUCTTYPE_ID as id, PRODUCTYPE_NAME as name')
+            ->selectRaw('PRODUCTTYPE_ID as id, PRODUCTYPE_NAME as name, REMARKS as remarks')
             ->orderBy('PRODUCTYPE_NAME')
             ->get();
 
@@ -614,7 +660,7 @@ class ProductController extends Controller
         return response()->json(['success' => true]);
     }
 
-    public function store(Request $request): RedirectResponse
+    public function store(Request $request): RedirectResponse|JsonResponse
     {
         $validated = $request->validate([
             'product_no' => ['required', 'string', 'max:20'],
@@ -635,6 +681,9 @@ class ProductController extends Controller
             ->where('PRODUCTTYPE_ID', '=', $typeId)
             ->exists();
         if (! $typeExists) {
+            if ($request->ajax()) {
+                return response()->json(['error' => 'Selected product type was not found.'], 422);
+            }
             return back()->with('error', 'Selected product type was not found.');
         }
 
@@ -674,7 +723,25 @@ class ProductController extends Controller
                 ? 'Product code already exists.'
                 : 'Failed to create product: '.$e->getMessage();
 
+            if ($request->ajax()) {
+                return response()->json(['error' => $message], 422);
+            }
             return back()->with('error', $message)->withInput();
+        }
+
+        // Compute the next product code to return to the AJAX caller
+        $lastCode = DB::connection('oracle')->table('PRODUCTS')
+            ->selectRaw('MAX(PRODUCT_NO) as last_code')
+            ->value('last_code');
+        $nextProductCode = 'P0001';
+        if ($lastCode !== null) {
+            $digits = preg_replace('/\D/', '', (string) $lastCode);
+            $num = (int) $digits;
+            $nextProductCode = 'P'.str_pad($num + 1, strlen($digits), '0', STR_PAD_LEFT);
+        }
+
+        if ($request->ajax()) {
+            return response()->json(['success' => 'Product created.', 'next_product_code' => $nextProductCode]);
         }
 
         return back()->with('success', 'Product created.');
@@ -768,28 +835,48 @@ class ProductController extends Controller
         return 'images/products/'.$filename;
     }
 
-    public function createType(Request $request): RedirectResponse
+    public function createType(Request $request): RedirectResponse|JsonResponse
     {
         $validated = $request->validate([
             'type_name' => ['required', 'string', 'max:60'],
+            'remarks'   => ['nullable', 'string', 'max:255'],
         ]);
 
         try {
             DB::connection('oracle')->insert(
-                'INSERT INTO PRODUCT_TYPE (PRODUCTYPE_NAME) VALUES (:type_name)',
-                ['type_name' => (string) $validated['type_name']]
+                'INSERT INTO PRODUCT_TYPE (PRODUCTYPE_NAME, REMARKS) VALUES (:type_name, :remarks)',
+                [
+                    'type_name' => (string) $validated['type_name'],
+                    'remarks'   => $validated['remarks'] ?? null,
+                ]
             );
+            $newId = DB::connection('oracle')
+                ->table('PRODUCT_TYPE')
+                ->orderByDesc('PRODUCTTYPE_ID')
+                ->value('PRODUCTTYPE_ID');
         } catch (QueryException $e) {
+            if ($request->ajax()) {
+                return response()->json(['error' => 'Failed to create product type.'], 422);
+            }
             return back()->with('error', 'Failed to create product type: '.$e->getMessage());
         }
 
+        if ($request->ajax()) {
+            return response()->json([
+                'success' => true,
+                'id'      => $newId,
+                'name'    => $validated['type_name'],
+                'remarks' => $validated['remarks'] ?? '',
+            ]);
+        }
         return back()->with('success', 'Product type created.');
     }
 
-    public function updateType(Request $request, int $typeId): RedirectResponse
+    public function updateType(Request $request, int $typeId): RedirectResponse|JsonResponse
     {
         $validated = $request->validate([
             'type_name' => ['required', 'string', 'max:60'],
+            'remarks'   => ['nullable', 'string', 'max:255'],
         ]);
 
         try {
@@ -798,12 +885,56 @@ class ProductController extends Controller
                 ->where('PRODUCTTYPE_ID', '=', $typeId)
                 ->update([
                     'PRODUCTYPE_NAME' => (string) $validated['type_name'],
+                    'REMARKS'         => $validated['remarks'] ?? null,
                 ]);
         } catch (QueryException $e) {
+            if ($request->ajax()) {
+                return response()->json(['error' => 'Failed to update product type.'], 422);
+            }
             return back()->with('error', 'Failed to update product type: '.$e->getMessage());
         }
 
+        if ($request->ajax()) {
+            return response()->json([
+                'success' => true,
+                'name'    => $validated['type_name'],
+                'remarks' => $validated['remarks'] ?? '',
+            ]);
+        }
         return back()->with('success', 'Product type updated.');
+    }
+
+    public function checkTypeUsage(int $typeId): JsonResponse
+    {
+        $inUse = DB::connection('oracle')
+            ->table('PRODUCTS')
+            ->where('PRODUCT_TYPE', '=', $typeId)
+            ->exists();
+
+        return response()->json(['in_use' => $inUse]);
+    }
+
+    public function deleteType(Request $request, int $typeId): RedirectResponse|JsonResponse
+    {
+        try {
+            DB::connection('oracle')
+                ->table('PRODUCT_TYPE')
+                ->where('PRODUCTTYPE_ID', '=', $typeId)
+                ->delete();
+        } catch (QueryException $e) {
+            $msg = ($e->getCode() === '23000' || str_contains($e->getMessage(), 'ORA-02292'))
+                ? 'Cannot delete because this data is used by another product.'
+                : 'Failed to delete product type.';
+            if ($request->ajax()) {
+                return response()->json(['error' => $msg], 422);
+            }
+            return back()->with('error', $msg);
+        }
+
+        if ($request->ajax()) {
+            return response()->json(['success' => true]);
+        }
+        return back()->with('success', 'Product type deleted.');
     }
 
     public function updateAlertStock(Request $request, int $alertStockNo): RedirectResponse|JsonResponse
