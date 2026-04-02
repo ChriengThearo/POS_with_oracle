@@ -12,6 +12,7 @@ use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 use RuntimeException;
@@ -955,6 +956,12 @@ class EcommerceController extends Controller
             $qrPayload = $this->bakongQrPayload($recieveAmount, $currencyNo);
             $qrAmount = (float) ($qrPayload['amount'] ?? 0);
             $qrCurrencyCode = (string) ($qrPayload['currency_code'] ?? 'USD');
+            $qrRate = ($currencyNo && $currencyNo > 0) ? $this->currencyRateToUsd($currencyNo) : 1.0;
+            if ($qrRate <= 0) $qrRate = 1.0;
+            $invoiceGrandTotal = $this->invoiceGrandTotal((int) $invoiceNo);
+            $qrGrandTotal = $this->isRielCurrency($currencyNo)
+                ? round($invoiceGrandTotal * $qrRate, 0)
+                : round($invoiceGrandTotal, 2);
             try {
                 $qrString = BakongQR::generateMerchantQR($qrAmount, (string) $invoiceNo, $qrCurrencyCode);
             } catch (\Throwable $e) {
@@ -964,8 +971,10 @@ class EcommerceController extends Controller
             if ($qrString) {
                 $redirect
                     ->with('bakong_qr', $qrString)
+                    ->with('bakong_qr_md5', md5($qrString))
                     ->with('bakong_qr_amount', $qrAmount)
-                    ->with('bakong_qr_currency', $qrCurrencyCode);
+                    ->with('bakong_qr_currency', $qrCurrencyCode)
+                    ->with('bakong_qr_grand_total', $qrGrandTotal);
             }
         }
 
@@ -1072,6 +1081,12 @@ class EcommerceController extends Controller
             $qrPayload = $this->bakongQrPayload($recieveAmount, $currencyNo);
             $qrAmount = (float) ($qrPayload['amount'] ?? 0);
             $qrCurrencyCode = (string) ($qrPayload['currency_code'] ?? 'USD');
+            $qrRate = ($currencyNo && $currencyNo > 0) ? $this->currencyRateToUsd($currencyNo) : 1.0;
+            if ($qrRate <= 0) $qrRate = 1.0;
+            $invoiceGrandTotal = $this->invoiceGrandTotal($invoiceNo);
+            $qrGrandTotal = $this->isRielCurrency($currencyNo)
+                ? round($invoiceGrandTotal * $qrRate, 0)
+                : round($invoiceGrandTotal, 2);
             try {
                 $qrString = BakongQR::generateMerchantQR($qrAmount, (string) $invoiceNo, $qrCurrencyCode);
             } catch (\Throwable $e) {
@@ -1081,8 +1096,10 @@ class EcommerceController extends Controller
             if ($qrString) {
                 $redirect
                     ->with('bakong_qr', $qrString)
+                    ->with('bakong_qr_md5', md5($qrString))
                     ->with('bakong_qr_amount', $qrAmount)
-                    ->with('bakong_qr_currency', $qrCurrencyCode);
+                    ->with('bakong_qr_currency', $qrCurrencyCode)
+                    ->with('bakong_qr_grand_total', $qrGrandTotal);
             }
         }
 
@@ -2947,6 +2964,50 @@ class EcommerceController extends Controller
         }
 
         return $normalized;
+    }
+
+    public function checkBakongTransaction(Request $request): JsonResponse
+    {
+        $md5 = $request->query('md5');
+        if (!$md5 || !preg_match('/^[a-f0-9]{32}$/i', $md5)) {
+            return response()->json(['paid' => false]);
+        }
+
+        $token = (string) config('bakong.token', '');
+        if (!$token) {
+            return response()->json(['paid' => false]);
+        }
+
+        $invoiceGrandTotal = (float) $request->query('grand_total', 0);
+
+        try {
+            $response = Http::withoutVerifying()
+                ->withToken($token)
+                ->post('https://api-bakong.nbc.gov.kh/v1/check_transaction_by_md5', ['md5' => $md5]);
+
+            $result = $response->json();
+            $paid = isset($result['responseCode']) && (int) $result['responseCode'] === 0 && !empty($result['data']);
+            $amount = null;
+            $currency = null;
+            if ($paid) {
+                $data = (array) ($result['data'] ?? []);
+                $amount = $data['amount'] ?? null;
+                $currency = isset($data['currency']) ? strtoupper((string) $data['currency']) : null;
+
+                $paidAmount = $amount !== null ? (float) $amount : 0.0;
+                $debt = $invoiceGrandTotal > 0 ? round(max(0, $invoiceGrandTotal - $paidAmount), 2) : 0.0;
+
+                // Fire-and-forget: play Khmer TTS sound
+                $script = base_path('khmer_tts.py');
+                $amountArg = escapeshellarg((string) ($amount ?? '0'));
+                $currencyArg = escapeshellarg($currency ?? 'KHR');
+                $debtArg = escapeshellarg((string) $debt);
+                pclose(popen("start /B python \"{$script}\" {$amountArg} {$currencyArg} {$debtArg}", 'r'));
+            }
+            return response()->json(['paid' => $paid, 'amount' => $amount, 'currency' => $currency]);
+        } catch (\Throwable $e) {
+            return response()->json(['paid' => false]);
+        }
     }
 
     private function normalizeColumnToken(string $name): string

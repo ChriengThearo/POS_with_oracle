@@ -1065,6 +1065,53 @@
                         svg.style.height = '260px';
                     }
                 }
+
+                const qrMd5 = @json(session('bakong_qr_md5', md5(session('bakong_qr', ''))));
+                const checkBaseUrl = @json(route('bakong.check_transaction'));
+                const bakongQrGrandTotal = @json((float) session('bakong_qr_grand_total', 0));
+                const checkUrl = checkBaseUrl + '?md5=' + encodeURIComponent(qrMd5) + '&grand_total=' + encodeURIComponent(bakongQrGrandTotal);
+                const fallbackAmount = @json((float) session('bakong_qr_amount', 0));
+                const fallbackCurrency = @json($bakongQrCurrency);
+                let pollTimer = null;
+
+                const stopPolling = () => {
+                    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+                };
+
+                const showReceiveToast = (text) => {
+                    const main = document.querySelector('main.content');
+                    if (!main) return;
+                    const toast = document.createElement('div');
+                    toast.className = 'flash success toast';
+                    toast.innerHTML = `<span class="toast-ico" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" focusable="false"><path fill="currentColor" d="M9.55 17.55L4.5 12.5l1.4-1.4 3.65 3.65 8.05-8.05 1.4 1.4z"/></svg></span><span>${text}</span>`;
+                    main.insertBefore(toast, main.firstChild);
+                };
+
+                const poll = async () => {
+                    try {
+                        const res = await fetch(checkUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+                        if (!res.ok) return;
+                        const data = await res.json();
+                        if (data.paid) {
+                            stopPolling();
+                            const modal = document.getElementById('bakong-qr-modal');
+                            if (modal) modal.style.display = 'none';
+                            const currency = (data.currency || fallbackCurrency).toUpperCase();
+                            const decimals = currency === 'KHR' ? 0 : 2;
+                            const prefix = currency === 'USD' ? '$' : '';
+                            const amount = data.amount != null
+                                ? parseFloat(data.amount).toFixed(decimals)
+                                : parseFloat(fallbackAmount).toFixed(decimals);
+                            showReceiveToast('Receive: ' + prefix + amount + ' ' + currency);
+                        }
+                    } catch (_) {}
+                };
+
+                // Start polling every 3 seconds
+                pollTimer = setInterval(poll, 3000);
+
+                // Stop polling when modal is closed manually
+                document.getElementById('bakong-qr-close-btn')?.addEventListener('click', stopPolling);
             })();
         </script>
     @endif

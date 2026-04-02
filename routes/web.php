@@ -176,6 +176,8 @@ Route::middleware('staff.auth')->group(function (): void {
     Route::post('/invoices/{invoiceNo}/items', [EcommerceController::class, 'addInvoiceItems'])
         ->middleware('staff.ability:invoices.manage')
         ->name('invoices.items.store');
+    Route::get('/bakong/check-transaction', [EcommerceController::class, 'checkBakongTransaction'])
+        ->name('bakong.check_transaction');
     Route::delete('/invoices/{invoiceNo}/items/{productNo}', [EcommerceController::class, 'removeInvoiceItem'])
         ->middleware('staff.ability:invoices.manage')
         ->name('invoices.items.destroy');
