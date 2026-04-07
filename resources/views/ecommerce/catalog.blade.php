@@ -59,7 +59,6 @@
                 if ($profitDisplay > 0 && $profitDisplay <= 1) {
                     $profitDisplay *= 100;
                 }
-                
             @endphp
             <article class="card">
                 <div class="actions" style="justify-content: space-between; align-items: flex-start;">
