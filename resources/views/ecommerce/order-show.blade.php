@@ -31,7 +31,7 @@
             </div>
             <div class="actions" style="align-items: flex-start;">
                 <div style="display: grid; gap: 8px;">
-                    <a href="{{ route('store.orders') }}" class="btn btn-muted">Back To Orders</a>
+                    <a href="{{ $backUrl ?? route('store.orders') }}" class="btn btn-muted">{{ $backLabel ?? 'Back To Orders' }}</a>
                     @if($showRepayAction)
                         <button type="button" class="btn btn-primary" id="open-repay-modal">Repay</button>
                     @endif

@@ -64,7 +64,7 @@
                         </td>
                         <td><span class="chip">{{ $row->invoice_status ?? 'N/A' }}</span></td>
                         <td>
-                            <a href="{{ route('store.orders.show', ['invoiceNo' => (int) $row->invoice_no]) }}" class="btn btn-muted">Detail</a>
+                            <a href="{{ route('client-depts.detail', ['invoiceNo' => (int) $row->invoice_no]) }}" class="btn btn-muted">Detail</a>
                         </td>
                     </tr>
                 @empty

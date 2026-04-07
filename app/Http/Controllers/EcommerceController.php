@@ -21,7 +21,7 @@ class EcommerceController extends Controller
 {
     private const ORACLE_CONNECTION = 'oracle';
 
-    private const INVOICE_STATUSES = ['UNPAID', 'PAID', 'PARTIAL', 'In Process'];
+    private const INVOICE_STATUSES = ['UNPAID', 'PAID', 'PARTIAL', 'In Process', 'Completed', 'In Debt'];
 
     /**
      * Cache for table/column identity sequence names.
@@ -579,6 +579,28 @@ class EcommerceController extends Controller
         ]);
     }
 
+    public function clientDebtDetail(int $invoiceNo): RedirectResponse|View
+    {
+        $order = $this->loadOrder($invoiceNo);
+        if (! $order) {
+            return redirect()->route('client-depts.index')->with('error', "Invoice #{$invoiceNo} was not found.");
+        }
+
+        $debtAmount = $this->resolveInvoiceDebtAmount($invoiceNo);
+        $currencyOptions = $this->paymentCurrencyOptions();
+
+        return view('ecommerce.order-show', [
+            'order'                  => $order,
+            'debtAmount'             => $debtAmount,
+            'paymentCurrencies'      => $currencyOptions['paymentCurrencies'],
+            'defaultPaymentCurrency' => $currencyOptions['defaultPaymentCurrency'],
+            'cartCount'              => $this->cart->totalQuantity(),
+            'inProcessCount'         => $this->countInProcessInvoices(),
+            'backUrl'                => route('client-depts.index'),
+            'backLabel'              => 'Back To Client Debts',
+        ]);
+    }
+
     public function deptHistory(Request $request): View
     {
         $q = trim((string) $request->query('q', ''));
@@ -924,7 +946,6 @@ class EcommerceController extends Controller
     {
         $validated = $request->validate([
             'client_no' => ['required', 'integer'],
-            'invoice_status' => ['required', Rule::in(self::INVOICE_STATUSES)],
             'invoice_memo' => ['nullable', 'string', 'max:100'],
             'payment_amount' => ['required', 'numeric', 'min:0'],
             'recieve_amount' => ['required', 'numeric', 'min:0'],
@@ -984,14 +1005,17 @@ class EcommerceController extends Controller
             }
         }
 
+        $paymentAmount = (float) ($validated['payment_amount'] ?? 0);
+        $invoiceStatus = $recieveAmount >= $paymentAmount ? 'Completed' : 'In Debt';
+
         try {
             $conn = $this->db();
             $invoiceNo = null;
-            $conn->transaction(function () use ($conn, $clientNo, $employeeId, $validated, $items, $recieveAmount, $currencyNo, &$invoiceNo): void {
+            $conn->transaction(function () use ($conn, $clientNo, $employeeId, $validated, $items, $recieveAmount, $currencyNo, $invoiceStatus, &$invoiceNo): void {
                 $invoiceNo = $this->createInvoice(
                     $clientNo,
                     $employeeId,
-                    (string) $validated['invoice_status'],
+                    $invoiceStatus,
                     (string) ($validated['invoice_memo'] ?? '')
                 );
 
@@ -1019,7 +1043,7 @@ class EcommerceController extends Controller
 
         $redirect = redirect()
             ->route('invoices.index', ['invoice_no' => $invoiceNo])
-            ->with('success', "Invoice #{$invoiceNo} created.");
+            ->with('success', "Invoice #{$invoiceNo} created ({$invoiceStatus}).");
 
         if ($paymentType === 'qr') {
             $qrPayload = $this->bakongQrPayload($recieveAmount, $currencyNo);

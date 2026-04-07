@@ -227,6 +227,9 @@ Route::middleware('staff.auth')->group(function (): void {
     Route::get('/client-depts/history', [EcommerceController::class, 'deptHistory'])
         ->middleware('staff.ability:client-depts.read')
         ->name('client-depts.history');
+    Route::get('/client-depts/{invoiceNo}/detail', [EcommerceController::class, 'clientDebtDetail'])
+        ->middleware('staff.ability:client-depts.read')
+        ->name('client-depts.detail');
 
     Route::get('/currencies', [CurrencyController::class, 'index'])
         ->middleware('staff.ability:currencies.read')

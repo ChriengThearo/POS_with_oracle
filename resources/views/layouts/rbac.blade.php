@@ -897,8 +897,7 @@
             $clientDeptCount = (int) \Illuminate\Support\Facades\DB::connection('oracle')
                 ->table('INVOICES')
                 ->where('INVOICE_STATUS', '=', 'In Debt')
-                ->selectRaw('COUNT(DISTINCT CLIENT_NO) as total')
-                ->value('total');
+                ->count();
         } catch (\Throwable) {
             $clientDeptCount = 0;
         }

@@ -749,8 +749,7 @@
             $clientDeptCount = (int) \Illuminate\Support\Facades\DB::connection('oracle')
                 ->table('INVOICES')
                 ->where('INVOICE_STATUS', '=', 'In Debt')
-                ->selectRaw('COUNT(DISTINCT CLIENT_NO) as total')
-                ->value('total');
+                ->count();
         } catch (\Throwable) {
             $clientDeptCount = 0;
         }
@@ -808,21 +807,6 @@
                     <a href="{{ route('store.catalog') }}" class="nav-link {{ request()->routeIs('store.catalog') ? 'active' : '' }}">
                         <span class="nav-ico">S</span>
                         Shop
-                    </a>
-                @endif
-                @if($canCheckout)
-                    <a href="{{ route('store.cart') }}" class="nav-link {{ request()->routeIs('store.cart*') || request()->routeIs('store.checkout*') ? 'active' : '' }}">
-                        <span class="nav-ico">C</span>
-                        Checkout
-                    </a>
-                @endif
-                @if($canOrders)
-                    <a href="{{ route('store.orders') }}" class="nav-link {{ request()->routeIs('store.orders*') ? 'active' : '' }}" style="display: flex; align-items: center; gap: 8px;">
-                        <span class="nav-ico">O</span>
-                        Orders
-                        @if($inProcessCount > 0)
-                            <span class="nav-badge">{{ $inProcessCount }}</span>
-                        @endif
                     </a>
                 @endif
                 @if($canTotalSales)
